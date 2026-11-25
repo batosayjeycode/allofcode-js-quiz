@@ -9,16 +9,20 @@ const STATUS_ICON = {
   running: () => icons.spinner(12),
 };
 
+const NAV_ACTIONS = { preparation: 'preview', quiz: 'go-to' };
+
 export function renderNavigator({ questions, state }) {
   const items = questions
     .map((question, index) => {
       const status = questionStatus(state.answers[question.id]);
-      const current = state.view === 'question' && index === state.currentIndex;
+      const current = state.phase === 'quiz' && index === state.currentIndex;
+      // Preparation: jump to the question in the review list. Quiz: open it. Otherwise read-only.
+      const action = NAV_ACTIONS[state.phase];
       return `
         <li>
           <button
-            class="${cx('nav-item', `nav-item--${status}`, current && 'is-current')}"
-            data-action="go-to" data-index="${index}"
+            class="${cx('nav-item', `nav-item--${status}`, current && 'is-current', !action && 'is-static')}"
+            ${action ? `data-action="${action}"` : 'disabled'} data-index="${index}"
             data-testid="nav-item" data-status="${status}"
             ${current ? 'aria-current="step"' : ''}
             aria-label="Question ${index + 1}: ${escapeHtml(question.title)} — ${STATUS_LABELS[status]}">
