@@ -38,9 +38,29 @@ src/
     bank/*.js          the question files; every file here is loaded automatically
     helpers.js         output() / values() / throws() / timesOut() authoring helpers
     schema.js          validation & normalisation of questions
-  state/             session reducer/store (+ sessionStorage), scoring
+  state/             phase state machine + store (+ sessionStorage), deadline ticker, scoring
   ui/                rendering only: components, highlighter, markdown, app shell
 ```
+
+### Quiz flow
+
+The session is a strict, forward-only state machine (`src/state/session.js`):
+
+```
+preparation (5 min, read-only) → durationSelection (5 / 10 / 15 min) → quiz → result
+```
+
+- **Preparation** shows every question read-only. Answering and running are disabled, and the phase can't be skipped.
+- **Duration selection** offers only 5, 10 or 15 minutes. Choosing starts the quiz; the choice can't be changed.
+- **Quiz** ends when every question has been run or the deadline passes. Runs still in progress at the deadline are
+  discarded, so those questions count as unanswered.
+- **Result** is read-only and can't be left except by starting a new quiz.
+
+Timers are deadline based: the state stores absolute timestamps, and every action is stamped with the current time.
+The reducer applies any deadline that has passed *before* handling an action, so a throttled background tab, a late
+tick or a reload can never extend a phase or let a late answer count. A single ticker (`src/state/timer.js`) checks
+the clock every 250 ms and again on `visibilitychange`, `focus` and `pageshow`. The session, including its deadlines,
+is saved to `sessionStorage`, so a refresh resumes where it left off with the clock still running.
 
 ### Execution sandbox
 

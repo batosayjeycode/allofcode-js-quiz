@@ -51,8 +51,8 @@ export function renderQuestionView({ question, index, total, answer }) {
 
       <nav class="pager" aria-label="Question navigation">
         <button class="btn btn--ghost" data-action="previous" data-testid="prev-button" ${index === 0 ? 'disabled' : ''}>${icons.left()} Previous</button>
-        <button class="${cx('btn', done ? 'btn--primary' : 'btn--secondary')}" data-action="next" data-testid="next-button">
-          ${isLast ? `Finish ${icons.flag()}` : `Next question ${icons.right()}`}
+        <button class="${cx('btn', done && !isLast ? 'btn--primary' : 'btn--secondary')}" data-action="next" data-testid="next-button" ${isLast ? 'disabled' : ''}>
+          Next question ${icons.right()}
         </button>
       </nav>
     </article>`;

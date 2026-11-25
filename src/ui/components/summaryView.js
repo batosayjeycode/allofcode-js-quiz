@@ -3,6 +3,11 @@ import { renderInline } from '../markdown.js';
 import { icons } from './icons.js';
 import { questionStatus, STATUS_LABELS } from './status.js';
 
+const END_REASONS = {
+  completed: `${icons.check(14)} All questions answered`,
+  timeout: `${icons.clock(14)} Time's up`,
+};
+
 function stat(label, value, testId, tone) {
   return `<div class="${cx('stat', tone && `stat--${tone}`)}"><span class="stat__value" data-testid="${testId}">${value}</span><span class="stat__label">${label}</span></div>`;
 }
@@ -21,7 +26,6 @@ export function renderSummaryView({ questions, state, summary, confirmRestart })
           <td class="mono center">${evaluation ? escapeHtml(evaluation.correctOptionId ?? '?') : '—'}</td>
           <td><span class="${cx('status-tag', `status-tag--${status}`)}">${STATUS_LABELS[status]}</span></td>
           <td class="mono right">${evaluation ? evaluation.pointsEarned : 0} / ${question.points}</td>
-          <td class="right"><button class="btn btn--ghost btn--sm" data-action="go-to" data-index="${index}">Review</button></td>
         </tr>`;
     })
     .join('');
@@ -36,6 +40,7 @@ export function renderSummaryView({ questions, state, summary, confirmRestart })
       <header class="summary__hero">
         <div>
           <p class="eyebrow">Interview result</p>
+          <p class="${cx('end-reason', state.endReason === 'timeout' && 'end-reason--timeout')}" data-testid="end-reason" data-reason="${escapeHtml(state.endReason ?? '')}">${END_REASONS[state.endReason] ?? ''}${state.durationMinutes ? ` · ${state.durationMinutes}-minute quiz` : ''}</p>
           <h1 class="summary__score"><span data-testid="summary-percentage">${summary.percentage}%</span></h1>
           <p class="${cx('performance', `performance--${performance.tone}`)}">Performance: <strong data-testid="summary-performance">${performance.label}</strong></p>
         </div>
@@ -53,13 +58,12 @@ export function renderSummaryView({ questions, state, summary, confirmRestart })
 
       <div class="table-wrap">
         <table class="summary-table">
-          <thead><tr><th>#</th><th>Question</th><th class="center">Answer</th><th class="center">Actual</th><th>Status</th><th class="right">Points</th><th></th></tr></thead>
+          <thead><tr><th>#</th><th>Question</th><th class="center">Answer</th><th class="center">Actual</th><th>Status</th><th class="right">Points</th></tr></thead>
           <tbody>${rows}</tbody>
         </table>
       </div>
 
       <div class="summary__actions">
-        <button class="btn btn--ghost" data-action="back-to-questions">${icons.left()} Back to questions</button>
         <button class="${cx('btn', confirmRestart ? 'btn--danger' : 'btn--secondary')}" data-action="restart">${icons.restart()} ${confirmRestart ? 'Confirm: discard answers' : 'Start a new interview'}</button>
       </div>
     </article>`;

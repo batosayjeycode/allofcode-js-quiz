@@ -1,7 +1,19 @@
-import { escapeHtml } from '../dom.js';
 import { icons } from './icons.js';
 
-export function renderHeader({ summary, view, confirmRestart }) {
+const TIMER_LABELS = { preparation: 'Preparation', quiz: 'Time left' };
+
+/** Countdown pill. Its text is refreshed in place every tick (see app.js) without a full re-render. */
+export function renderTimer(phase) {
+  const label = TIMER_LABELS[phase];
+  if (!label) return '';
+  return `
+    <div class="timer timer--${phase}" role="timer" data-testid="timer" data-phase="${phase}">
+      <span class="timer__label">${label}</span>
+      <span class="timer__value" data-timer-value>--:--</span>
+    </div>`;
+}
+
+export function renderHeader({ summary, phase, confirmRestart }) {
   const progress = summary.totalQuestions ? (summary.completed / summary.totalQuestions) * 100 : 0;
   return `
     <div class="topbar__brand">
@@ -18,15 +30,13 @@ export function renderHeader({ summary, view, confirmRestart }) {
       </div>
     </div>
     <div class="topbar__actions">
+      ${renderTimer(phase)}
       ${
-        view === 'summary'
-          ? `<button class="btn btn--ghost" data-action="back-to-questions">${icons.left()} Questions</button>`
-          : `<button class="btn btn--ghost" data-action="show-summary">${icons.flag()} ${escapeHtml(summary.unanswered ? 'Finish' : 'Results')}</button>`
-      }
-      ${
-        confirmRestart
-          ? `<button class="btn btn--danger" data-action="restart" data-testid="confirm-restart">${icons.restart()} Confirm restart</button>`
-          : `<button class="btn btn--ghost btn--icon" data-action="restart" data-testid="restart" title="Restart interview" aria-label="Restart interview">${icons.restart()}</button>`
+        phase !== 'result'
+          ? ''
+          : confirmRestart
+            ? `<button class="btn btn--danger" data-action="restart" data-testid="confirm-restart">${icons.restart()} Confirm restart</button>`
+            : `<button class="btn btn--ghost btn--icon" data-action="restart" data-testid="restart" title="Restart interview" aria-label="Restart interview">${icons.restart()}</button>`
       }
     </div>`;
 }
