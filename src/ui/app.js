@@ -216,6 +216,7 @@ export function mountApp(root, { questions, store, execute }) {
     preview: previewQuestion,
     'select-duration': (el) => store.dispatch({ type: 'selectDuration', minutes: Number(el.dataset.minutes) }),
     restart: requestRestart,
+    'export-pdf': exportPdf,
   };
 
   function onClick(event) {
@@ -269,6 +270,49 @@ export function mountApp(root, { questions, store, execute }) {
   // Any interaction re-checks the deadlines first.
   const onInteraction = () => store.dispatch({ type: 'tick' });
 
+  /**
+   * PDF export uses the browser's print dialog ("Save as PDF"): a real, text-based
+   * PDF with no extra dependency. The print stylesheet turns the result page into a
+   * report; here every review item is expanded and the document title becomes the
+   * suggested file name. The same happens for Ctrl/Cmd+P on the result page.
+   */
+  const printState = { title: null, closed: [] };
+
+  function exportFileName(state) {
+    const at = new Date(state.endedAt ?? now());
+    const pad = (n) => String(n).padStart(2, '0');
+    const summary = computeSummary(sessionQuestions(), state.answers);
+    return `js-quiz-result-${at.getFullYear()}-${pad(at.getMonth() + 1)}-${pad(at.getDate())}-${pad(at.getHours())}${pad(at.getMinutes())}-${summary.earnedPoints}of${summary.totalPoints}`;
+  }
+
+  function onBeforePrint() {
+    const state = store.getState();
+    if (state.phase !== 'result' || printState.title !== null) return;
+    printState.title = document.title;
+    printState.closed = [...regions.main.querySelectorAll('details:not([open])')];
+    for (const details of printState.closed) details.open = true;
+    document.title = exportFileName(state);
+  }
+
+  function onAfterPrint() {
+    if (printState.title === null) return;
+    document.title = printState.title;
+    for (const details of printState.closed) if (details.isConnected) details.open = false;
+    printState.title = null;
+    printState.closed = [];
+  }
+
+  function exportPdf() {
+    if (store.getState().phase !== 'result') return;
+    onBeforePrint(); // some browsers fire beforeprint late or not at all for window.print()
+    try {
+      window.print();
+    } finally {
+      // print() blocks until the dialog closes in most browsers; afterprint restores too.
+      if (!('onafterprint' in window)) onAfterPrint();
+    }
+  }
+
   const listeners = [
     [root, 'click', onClick],
     [root, 'change', onChange],
@@ -280,6 +324,8 @@ export function mountApp(root, { questions, store, execute }) {
     [window, 'storage', onExternalChange],
     [window, 'pageshow', onExternalChange],
     [window, 'focus', onExternalChange],
+    [window, 'beforeprint', onBeforePrint],
+    [window, 'afterprint', onAfterPrint],
   ];
   for (const [target, type, fn, capture] of listeners) target.addEventListener(type, fn, capture);
 

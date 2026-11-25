@@ -12,6 +12,7 @@ export const icons = {
   right: (s) => svg('<path d="m9 18 6-6-6-6"/>', s),
   restart: (s) => svg('<path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/>', s),
   flag: (s) => svg('<path d="M4 22V4m0 0h13l-2 4 2 4H4"/>', s),
+  download: (s) => svg('<path d="M12 4v11m0 0-4.5-4.5M12 15l4.5-4.5"/><path d="M4 17v2a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-2"/>', s),
   lock: (s) => svg('<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>', s),
   terminal: (s) => svg('<path d="m4 17 6-5-6-5m8 12h8"/>', s),
   book: (s) => svg('<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20V3H6.5A2.5 2.5 0 0 0 4 5.5z"/><path d="M4 19.5A2.5 2.5 0 0 0 6.5 22H20v-5"/>', s),

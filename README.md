@@ -96,6 +96,11 @@ quiz can still get a fresh session; preventing that needs a server.
 - **Result page.** Score / maximum, accuracy, correct / incorrect / unanswered, completion status (Completed / Time
   expired), time spent, tab switches, and a per-question review with the candidate's answer, the correct answer, the
   explanation, difficulty and points.
+- **Export PDF.** The result page's *Export PDF* button opens the browser's print dialog (choose *Save as PDF*). A
+  print stylesheet turns the page into a light, text-based report with a header (start / end time, limit, session),
+  every answer review expanded and app controls hidden; the suggested file name is
+  `js-quiz-result-<date>-<time>-<points>of<max>`. Ctrl/Cmd+P on the result page gives the same report. No PDF
+  library is needed.
 - **Interviewer summary** (`src/state/assessment.js`). Built from the answers with fixed rules, no AI: overall
   performance, strengths (topics answered fully correctly), areas for improvement (topics with incorrect or
   unanswered questions, most incorrect first), a breakdown by difficulty, follow-up topics from per-category prompts in
