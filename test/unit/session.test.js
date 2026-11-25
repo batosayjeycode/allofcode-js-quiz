@@ -2,7 +2,16 @@ import { describe, expect, it, vi } from 'vitest';
 import { output, throws } from '../../src/questions/helpers.js';
 import { normalizeQuestion } from '../../src/questions/schema.js';
 import { computeSummary, performanceFor } from '../../src/state/scoring.js';
-import { createReducer, createSessionStore, hydrateState, PREPARATION_MS, QUIZ_DURATIONS } from '../../src/state/session.js';
+import {
+  createInitialState,
+  createReducer,
+  createSessionStore,
+  hydrateState,
+  PREPARATION_MS,
+  QUIZ_DURATIONS,
+  STALE_SESSION_MS,
+  validateState,
+} from '../../src/state/session.js';
 import { createTicker, formatCountdown, remainingMs } from '../../src/state/timer.js';
 
 const makeQuestion = (id, points = 1) =>
@@ -112,7 +121,7 @@ describe('session reducer', () => {
     });
   });
 
-  it('persists and restores the session, unlocking interrupted runs', () => {
+  it('persists and restores the session, keeping interrupted runs locked', () => {
     const storage = memoryStorage();
     const store = quizStore({ storage });
     answer(store, 'Q1', 'A');
@@ -124,7 +133,7 @@ describe('session reducer', () => {
     expect(restored).toMatchObject({ phase: 'quiz', durationMinutes: 15, quizEndsAt: store.getState().quizEndsAt });
     expect(restored.currentIndex).toBe(1);
     expect(restored.answers.Q1.status).toBe('done');
-    expect(restored.answers.Q2).toEqual({ status: 'idle', selectedOptionId: 'B' });
+    expect(restored.answers.Q2).toMatchObject({ status: 'running', selectedOptionId: 'B' });
   });
 
   it('discards persisted state from a different question set', () => {
@@ -346,5 +355,199 @@ describe('scoring', () => {
     [49.9, 'Needs Improvement'],
   ])('performance for %s%% is %s', (pct, label) => {
     expect(performanceFor(pct).label).toBe(label);
+  });
+});
+
+describe('anti-cheat: persistence and tabs', () => {
+  const KEY = 'js-quiz:session';
+
+  it('reloading never resets the preparation or quiz deadline', () => {
+    const storage = memoryStorage();
+    const clock = fakeClock();
+    const first = createSessionStore(questions, { storage, now: clock });
+    const { sessionId, preparationEndsAt } = first.getState();
+    for (let i = 0; i < 3; i += 1) {
+      clock.advance(MINUTE);
+      expect(createSessionStore(questions, { storage, now: clock }).getState()).toMatchObject({ sessionId, preparationEndsAt });
+    }
+
+    clock.advance(2 * MINUTE);
+    const store = createSessionStore(questions, { storage, now: clock });
+    store.dispatch({ type: 'selectDuration', minutes: 5 });
+    const { quizEndsAt } = store.getState();
+    clock.advance(MINUTE);
+    const reloaded = createSessionStore(questions, { storage, now: clock });
+    expect(reloaded.getState()).toMatchObject({ phase: 'quiz', sessionId, quizEndsAt });
+    // An active quiz can't be restarted, from any tab.
+    reloaded.dispatch({ type: 'restart' });
+    expect(reloaded.getState()).toMatchObject({ phase: 'quiz', sessionId });
+  });
+
+  it('never lets the clock run backwards, so moving the system clock back adds no time', () => {
+    const storage = memoryStorage();
+    const clock = fakeClock(10 * MINUTE);
+    const store = quizStore({ minutes: 5, storage, clock });
+    clock.advance(4 * MINUTE);
+    store.dispatch({ type: 'tick' });
+    const before = store.now();
+
+    clock.advance(-60 * MINUTE); // user moves the system clock back an hour
+    expect(store.now()).toBe(before);
+    // Also after a reload, which reads the persisted high-water mark.
+    const reloaded = createSessionStore(questions, { storage, now: clock });
+    expect(reloaded.now()).toBeGreaterThanOrEqual(before - 1000);
+    clock.advance(61 * MINUTE + 1000);
+    reloaded.dispatch({ type: 'tick' });
+    expect(reloaded.getState()).toMatchObject({ phase: 'result', endReason: 'timeout' });
+  });
+
+  it('shares one session between tabs, and a stale tab cannot overwrite a finished quiz', () => {
+    const storage = memoryStorage();
+    const clock = fakeClock();
+    const tabA = createSessionStore(questions, { storage, now: clock });
+    const tabB = createSessionStore(questions, { storage, now: clock });
+    expect(tabB.getState().sessionId).toBe(tabA.getState().sessionId);
+
+    clock.advance(PREPARATION_MS);
+    tabA.dispatch({ type: 'selectDuration', minutes: 10 });
+    tabB.dispatch({ type: 'selectDuration', minutes: 15 }); // too late: tab A already chose
+    expect(tabB.getState()).toMatchObject({ phase: 'quiz', durationMinutes: 10 });
+
+    answer(tabA, 'Q1', 'A');
+    answer(tabA, 'Q2', 'A');
+    // Tab B still holds the older in-memory state, but acts on the stored one.
+    tabB.dispatch({ type: 'selectOption', questionId: 'Q3', optionId: 'B' });
+    expect(tabB.getState().answers.Q1.status).toBe('done');
+
+    answer(tabA, 'Q3', 'A'); // completes the quiz
+    expect(tabA.getState()).toMatchObject({ phase: 'result', endReason: 'completed' });
+    for (const action of [
+      { type: 'selectOption', questionId: 'Q3', optionId: 'C' },
+      { type: 'runStarted', questionId: 'Q3' },
+      { type: 'runCompleted', questionId: 'Q3', result },
+      { type: 'goTo', index: 0 },
+    ]) {
+      tabB.dispatch(action);
+    }
+    expect(tabB.getState()).toMatchObject({ phase: 'result', endReason: 'completed' });
+    expect(JSON.parse(storage.data.get(KEY))).toMatchObject({ phase: 'result', endReason: 'completed' });
+  });
+
+  it('runs a duplicate completion only once across tabs', () => {
+    const storage = memoryStorage();
+    const tabA = quizStore({ storage });
+    const tabB = createSessionStore(questions, { storage, now: tabA.clock });
+    tabA.dispatch({ type: 'selectOption', questionId: 'Q1', optionId: 'A' });
+    tabA.dispatch({ type: 'runStarted', questionId: 'Q1' });
+    tabB.dispatch({ type: 'runStarted', questionId: 'Q1' }); // already locked
+    tabA.dispatch({ type: 'runCompleted', questionId: 'Q1', result });
+    const completedAt = tabA.getState().answers.Q1.completedAt;
+    tabA.clock.advance(500);
+    tabB.dispatch({ type: 'runCompleted', questionId: 'Q1', result: { ...result, status: 'error' } });
+    expect(tabB.getState().answers.Q1).toMatchObject({ status: 'done', completedAt });
+  });
+
+  it('ignores run results from another session (e.g. after a restart)', () => {
+    const store = quizStore({ minutes: 5 });
+    const { sessionId } = store.getState();
+    store.dispatch({ type: 'selectOption', questionId: 'Q1', optionId: 'A' });
+    store.dispatch({ type: 'runStarted', questionId: 'Q1' });
+    store.dispatch({ type: 'runCompleted', questionId: 'Q1', result, sessionId: 'someone-else' });
+    expect(store.getState().answers.Q1.status).toBe('running');
+    store.dispatch({ type: 'runCompleted', questionId: 'Q1', result, sessionId });
+    expect(store.getState().answers.Q1.status).toBe('done');
+  });
+
+  it('rewrites cleared or corrupted storage from memory instead of starting over', () => {
+    const storage = memoryStorage();
+    const store = quizStore({ storage });
+    answer(store, 'Q1', 'A');
+    const { sessionId } = store.getState();
+
+    storage.data.delete(KEY);
+    store.sync();
+    expect(JSON.parse(storage.data.get(KEY))).toMatchObject({ sessionId, phase: 'quiz' });
+
+    storage.data.set(KEY, '{not json');
+    store.dispatch({ type: 'next' });
+    expect(JSON.parse(storage.data.get(KEY))).toMatchObject({ sessionId, currentIndex: 1 });
+  });
+
+  it('starts a clean session from invalid, inconsistent or stale data', () => {
+    const clock = fakeClock(100 * STALE_SESSION_MS);
+    const valid = quizStore({ clock }).getState();
+    const cases = {
+      garbage: '{oops',
+      array: '[]',
+      wrongVersion: { ...valid, version: 2 },
+      shiftedDeadline: { ...valid, quizEndsAt: valid.quizEndsAt + 10 * MINUTE },
+      shortPreparation: { ...valid, preparationEndsAt: valid.preparationEndsAt - MINUTE },
+      quizBeforePreparationEnded: { ...valid, quizStartedAt: valid.preparationEndsAt - 1, quizEndsAt: valid.preparationEndsAt - 1 + 15 * MINUTE },
+      answersBeforeQuiz: { ...createInitialState(questions, clock()), answers: { Q1: { status: 'idle', selectedOptionId: 'A' } } },
+      unknownOption: { ...valid, answers: { Q1: { status: 'idle', selectedOptionId: 'Z' } } },
+      completedWithoutAnswers: { ...valid, phase: 'result', endReason: 'completed', endedAt: valid.quizStartedAt + 1 },
+      negativeTabSwitches: { ...valid, tabSwitches: -1 },
+    };
+    for (const [name, value] of Object.entries(cases)) {
+      const storage = memoryStorage();
+      storage.setItem(KEY, typeof value === 'string' ? value : JSON.stringify(value));
+      const state = createSessionStore(questions, { storage, now: clock }).getState();
+      expect(state.phase, name).toBe('preparation');
+      expect(state.sessionId, name).not.toBe(valid.sessionId);
+    }
+
+    // Stale: a result untouched for over a day.
+    const storage = memoryStorage();
+    const old = quizStore({ minutes: 5, storage, clock: fakeClock(100 * STALE_SESSION_MS) });
+    old.clock.advance(5 * MINUTE);
+    old.dispatch({ type: 'tick' });
+    expect(createSessionStore(questions, { storage, now: old.clock }).getState().phase).toBe('result');
+    old.clock.advance(STALE_SESSION_MS + 1);
+    expect(createSessionStore(questions, { storage, now: old.clock }).getState().phase).toBe('preparation');
+  });
+
+  it('recomputes scores from the stored results instead of trusting them', () => {
+    const store = quizStore();
+    answer(store, 'Q1', 'B'); // wrong
+    const saved = store.getState();
+    const tampered = {
+      ...saved,
+      answers: { Q1: { ...saved.answers.Q1, evaluation: { ...saved.answers.Q1.evaluation, isCorrect: true, pointsEarned: 99 } } },
+    };
+    expect(validateState(tampered, questions)).toBe(true);
+    const restored = hydrateState(tampered, questions, store.clock());
+    expect(restored.answers.Q1.evaluation).toMatchObject({ isCorrect: false, pointsEarned: 0 });
+  });
+});
+
+describe('anti-cheat: tab visibility', () => {
+  it('counts tab switches and time away during the quiz only, without pausing the timer', () => {
+    const clock = fakeClock();
+    const store = createSessionStore(questions, { now: clock });
+    store.dispatch({ type: 'visibilityChange', hidden: true }); // preparation: not counted
+    clock.advance(PREPARATION_MS);
+    store.dispatch({ type: 'selectDuration', minutes: 5 });
+    const { quizEndsAt } = store.getState();
+
+    store.dispatch({ type: 'visibilityChange', hidden: true });
+    store.dispatch({ type: 'visibilityChange', hidden: true }); // duplicate event
+    clock.advance(30_000);
+    store.dispatch({ type: 'visibilityChange', hidden: false });
+    store.dispatch({ type: 'visibilityChange', hidden: true });
+    clock.advance(10_000);
+    store.dispatch({ type: 'visibilityChange', hidden: false });
+    expect(store.getState()).toMatchObject({ tabSwitches: 2, hiddenMs: 40_000, hiddenSince: null, quizEndsAt });
+
+    // Hidden when time runs out: the open period is closed at the deadline.
+    store.dispatch({ type: 'visibilityChange', hidden: true });
+    clock.advance(10 * MINUTE);
+    store.dispatch({ type: 'visibilityChange', hidden: false });
+    expect(store.getState()).toMatchObject({
+      phase: 'result',
+      endReason: 'timeout',
+      tabSwitches: 3,
+      hiddenMs: 40_000 + (quizEndsAt - (quizEndsAt - 5 * MINUTE + 40_000)),
+      hiddenSince: null,
+    });
   });
 });

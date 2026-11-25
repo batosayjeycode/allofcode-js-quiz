@@ -6,7 +6,7 @@
  * exception: it is updated in place every tick so focus and scroll survive.
  */
 import { computeSummary } from '../state/scoring.js';
-import { QUIZ_DURATIONS } from '../state/session.js';
+import { QUIZ_DURATIONS, RUN_STALE_MS } from '../state/session.js';
 import { createTicker, formatCountdown, remainingMs } from '../state/timer.js';
 import { renderHeader } from './components/header.js';
 import { renderNavigator } from './components/navigator.js';
@@ -17,6 +17,7 @@ import { renderSummaryView } from './components/summaryView.js';
 const RESTART_CONFIRM_MS = 4000;
 const LOW_TIME_MS = 60_000;
 const TIMED_PHASES = new Set(['preparation', 'quiz']);
+const HISTORY_GUARD = 'jsQuizGuard';
 
 /**
  * @param {HTMLElement} root
@@ -24,11 +25,11 @@ const TIMED_PHASES = new Set(['preparation', 'quiz']);
  *   questions: Array,
  *   store: ReturnType<import('../state/session.js').createSessionStore>,
  *   execute: (code: string) => Promise<any>,
- *   now?: () => number,
  * }} deps
  * @returns {() => void} unmount: removes every listener and timer
  */
-export function mountApp(root, { questions, store, execute, now = Date.now }) {
+export function mountApp(root, { questions, store, execute }) {
+  const now = store.now; // monotonic clock shared with the session
   root.innerHTML = `
     <header class="topbar" data-region="header"></header>
     <div class="layout">
@@ -43,7 +44,7 @@ export function mountApp(root, { questions, store, execute, now = Date.now }) {
   };
 
   const ui = { confirmRestart: false, confirmTimer: null };
-  let sessionToken = 0; // invalidates in-flight runs once the quiz they belong to has ended
+  const ownRuns = new Set(); // question ids this tab is executing right now
 
   const currentQuestion = () => questions[store.getState().currentIndex];
 
@@ -72,6 +73,7 @@ export function mountApp(root, { questions, store, execute, now = Date.now }) {
     onTick() {
       store.dispatch({ type: 'tick' });
       updateCountdown();
+      resumeInterruptedRuns();
     },
   });
 
@@ -108,6 +110,7 @@ export function mountApp(root, { questions, store, execute, now = Date.now }) {
     root.dataset.phase = state.phase;
     updateCountdown();
     syncTicker(state.phase);
+    syncHistoryGuard(state.phase);
 
     if (state.phase === 'quiz') {
       regions.nav.querySelector('.is-current')?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
@@ -118,6 +121,23 @@ export function mountApp(root, { questions, store, execute, now = Date.now }) {
     }
   }
 
+  /**
+   * Executes a question whose answer is already locked ("running"). The result is
+   * tagged with its session, and the reducer re-checks the deadline with the
+   * completion time, so a run that finishes after time is up, after a restart,
+   * or after another tab completed it, is discarded rather than scored.
+   */
+  async function executeRun(question, sessionId) {
+    if (ownRuns.has(question.id)) return;
+    ownRuns.add(question.id);
+    try {
+      const result = await execute(question.code);
+      store.dispatch({ type: 'runCompleted', questionId: question.id, result, sessionId });
+    } finally {
+      ownRuns.delete(question.id);
+    }
+  }
+
   async function runCurrent() {
     const state = store.getState();
     if (state.phase !== 'quiz') return;
@@ -125,14 +145,39 @@ export function mountApp(root, { questions, store, execute, now = Date.now }) {
     const answer = state.answers[question.id];
     if (!answer?.selectedOptionId || answer.status !== 'idle') return;
 
-    const token = sessionToken;
-    store.dispatch({ type: 'runStarted', questionId: question.id });
-    if (store.getState().answers[question.id]?.status !== 'running') return; // the quiz ended first
-    const result = await execute(question.code);
-    if (token !== sessionToken) return;
-    // The reducer re-checks the deadline with the completion time, so a run that
-    // finishes after time is up is discarded rather than scored.
-    store.dispatch({ type: 'runCompleted', questionId: question.id, result });
+    const next = store.dispatch({ type: 'runStarted', questionId: question.id });
+    if (next.answers[question.id]?.status !== 'running') return; // the quiz ended or another tab ran it first
+    await executeRun(question, next.sessionId);
+  }
+
+  /**
+   * A run interrupted by a reload or a closed tab stays locked ("running") in the
+   * saved session. Once it is clearly abandoned, run it again so the locked
+   * answer gets its result; the answer itself can't be changed in between.
+   */
+  function resumeInterruptedRuns() {
+    const state = store.getState();
+    if (state.phase !== 'quiz') return;
+    const t = now();
+    for (const question of questions) {
+      const answer = state.answers[question.id];
+      if (answer?.status === 'running' && t - answer.runStartedAt >= RUN_STALE_MS) executeRun(question, state.sessionId);
+    }
+  }
+
+  /**
+   * Back/forward can't leave an active quiz: a guard history entry is kept on top,
+   * and popping it pushes it straight back. The view always follows the session
+   * state, so any navigation into the app lands on the current phase (the result,
+   * once the quiz is over).
+   */
+  function syncHistoryGuard(phase) {
+    if (phase !== 'quiz' || window.history?.state?.[HISTORY_GUARD]) return;
+    try {
+      window.history.pushState({ ...(window.history.state ?? {}), [HISTORY_GUARD]: true }, '');
+    } catch {
+      /* history unavailable (sandboxed iframe) */
+    }
   }
 
   function requestRestart() {
@@ -197,22 +242,45 @@ export function mountApp(root, { questions, store, execute, now = Date.now }) {
     }
   }
 
-  // Leaving mid-quiz doesn't pause the timer (the deadline is saved), but closing
-  // the tab would lose the session, so ask first.
+  // Leaving mid-quiz doesn't pause or reset anything (the session is saved), but
+  // ask first so it isn't done by accident.
   function onBeforeUnload(event) {
     if (store.getState().phase !== 'quiz') return;
     event.preventDefault();
     event.returnValue = '';
   }
 
-  root.addEventListener('click', onClick);
-  root.addEventListener('change', onChange);
-  document.addEventListener('keydown', onKeydown);
-  window.addEventListener('beforeunload', onBeforeUnload);
+  function onPopState() {
+    if (store.getState().phase === 'quiz') syncHistoryGuard('quiz');
+    store.sync();
+  }
+
+  // Hidden tabs (switching tabs, minimizing) are recorded; the countdown keeps running.
+  function onVisibilityChange() {
+    store.dispatch({ type: 'visibilityChange', hidden: document.visibilityState === 'hidden' });
+  }
+
+  // Another tab changed the session (or the page came back from the back/forward cache).
+  const onExternalChange = () => store.sync();
+  // Any interaction re-checks the deadlines first.
+  const onInteraction = () => store.dispatch({ type: 'tick' });
+
+  const listeners = [
+    [root, 'click', onClick],
+    [root, 'change', onChange],
+    [document, 'keydown', onKeydown],
+    [document, 'pointerdown', onInteraction, true],
+    [document, 'visibilitychange', onVisibilityChange],
+    [window, 'beforeunload', onBeforeUnload],
+    [window, 'popstate', onPopState],
+    [window, 'storage', onExternalChange],
+    [window, 'pageshow', onExternalChange],
+    [window, 'focus', onExternalChange],
+  ];
+  for (const [target, type, fn, capture] of listeners) target.addEventListener(type, fn, capture);
 
   const unsubscribe = store.subscribe((state, action, previous) => {
-    const phaseChanged = state.phase !== previous.phase;
-    if (phaseChanged && previous.phase === 'quiz') sessionToken += 1;
+    const phaseChanged = state.phase !== previous.phase || state.sessionId !== previous.sessionId;
     if (phaseChanged) {
       clearTimeout(ui.confirmTimer);
       ui.confirmRestart = false;
@@ -223,14 +291,13 @@ export function mountApp(root, { questions, store, execute, now = Date.now }) {
   });
 
   render();
+  onVisibilityChange(); // closes a hidden period left open by a reload, or opens one for a background tab
+  resumeInterruptedRuns();
 
   return function unmount() {
     ticker.stop();
     clearTimeout(ui.confirmTimer);
     unsubscribe();
-    root.removeEventListener('click', onClick);
-    root.removeEventListener('change', onChange);
-    document.removeEventListener('keydown', onKeydown);
-    window.removeEventListener('beforeunload', onBeforeUnload);
+    for (const [target, type, fn, capture] of listeners) target.removeEventListener(type, fn, capture);
   };
 }

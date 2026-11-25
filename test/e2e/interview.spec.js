@@ -230,6 +230,131 @@ test('a long pause (throttled or hidden tab) still ends the quiz at its deadline
   await expect(page.getByTestId('summary-unanswered')).toHaveText(String(questions.length - 1));
 });
 
+test.describe('anti-cheat', () => {
+  const STORAGE_KEY = 'js-quiz:session';
+  const timerSeconds = async (page) => {
+    const [m, sec] = (await page.locator('[data-timer-value]').first().textContent()).split(':').map(Number);
+    return m * 60 + sec;
+  };
+  const setHidden = (page, hidden) =>
+    page.evaluate((value) => {
+      Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => (value ? 'hidden' : 'visible') });
+      document.dispatchEvent(new Event('visibilitychange'));
+    }, hidden);
+
+  test('back and forward navigation cannot leave the active quiz', async ({ page }) => {
+    await startQuiz(page, 10);
+    await answerCurrent(page, questions[0].answer);
+    const url = page.url();
+    await page.goBack();
+    await expect(page.getByTestId('question')).toBeVisible();
+    await expect(page.getByTestId('timer')).toHaveAttribute('data-phase', 'quiz');
+    expect(page.url()).toBe(url);
+    await page.goBack();
+    await page.goForward();
+    await expect(page.getByTestId('question')).toBeVisible();
+    await expect(page.getByTestId('progress-count')).toHaveText('1');
+  });
+
+  test('leaving the site and coming back resumes the quiz with the clock still running, then only the result', async ({ page }) => {
+    await startQuiz(page, 5);
+    await answerCurrent(page, questions[0].answer);
+    const before = await timerSeconds(page);
+
+    page.on('dialog', (dialog) => dialog.accept());
+    await page.goto('about:blank');
+    await page.clock.fastForward('02:00');
+    await page.goto('/');
+    await expect(page.getByTestId('question')).toBeVisible();
+    await expect(page.getByTestId('progress-count')).toHaveText('1');
+    expect(await timerSeconds(page)).toBeLessThanOrEqual(before - 119);
+
+    await page.clock.fastForward('03:00');
+    await expect(page.getByTestId('summary')).toBeVisible();
+    // Returning to the app after it ended always shows the result.
+    await page.goto('about:blank');
+    await page.goto('/');
+    await expect(page.getByTestId('summary')).toBeVisible();
+    await expect(page.getByTestId('end-reason')).toHaveAttribute('data-reason', 'timeout');
+    await page.goBack();
+    await page.goForward();
+    await expect(page.getByTestId('summary')).toBeVisible();
+    await expect(page.getByTestId('question')).toHaveCount(0);
+  });
+
+  test('tab switches are counted without pausing the countdown, and shown on the result', async ({ page }) => {
+    await startQuiz(page, 5);
+    const before = await timerSeconds(page);
+    await setHidden(page, true);
+    await page.clock.fastForward('01:00');
+    await setHidden(page, false);
+    expect(await timerSeconds(page)).toBeLessThanOrEqual(before - 59);
+    await setHidden(page, true);
+    await setHidden(page, false);
+
+    await page.clock.fastForward('05:00');
+    await expect(page.getByTestId('summary')).toBeVisible();
+    await expect(page.getByTestId('tab-switches')).toHaveAttribute('data-count', '2');
+    await expect(page.getByTestId('tab-switches')).toContainText('Left the quiz tab 2 times');
+  });
+
+  test('a second tab joins the same session, and finishing in one tab ends it in both', async ({ page, context }) => {
+    await startQuiz(page, 15);
+    await answerCurrent(page, questions[0].answer);
+
+    const second = await context.newPage();
+    await second.goto('/');
+    await expect(second.getByTestId('question')).toBeVisible();
+    await expect(second.getByTestId('progress-count')).toHaveText('1');
+    await expect(second.getByTestId('nav-item').first()).toHaveAttribute('data-status', 'correct');
+
+    // Answer the rest in the second tab; the first tab follows along.
+    for (let i = 1; i < questions.length; i += 1) {
+      await second.getByTestId('nav-item').nth(i).click();
+      await second.locator(`[data-testid="option"][data-option-id="${questions[i].answer}"]`).click();
+      await second.getByTestId('run-button').click();
+      await expect(second.getByTestId('progress-count')).toHaveText(String(i + 1), { timeout: 10_000 });
+    }
+    await expect(second.getByTestId('summary')).toBeVisible();
+    await expect(page.getByTestId('summary')).toBeVisible();
+    await expect(page.getByTestId('end-reason')).toHaveAttribute('data-reason', 'completed');
+    await expect(page.getByTestId('summary-percentage')).toHaveText('100%');
+    await second.close();
+  });
+
+  test('editing the saved session while the quiz is open is undone', async ({ page }) => {
+    await startQuiz(page, 5);
+    const before = await timerSeconds(page);
+    await page.evaluate((key) => {
+      const saved = JSON.parse(localStorage.getItem(key));
+      saved.quizEndsAt += 60 * 60_000; // try to grant an extra hour
+      localStorage.setItem(key, JSON.stringify(saved));
+    }, STORAGE_KEY);
+    page.on('dialog', (dialog) => dialog.accept());
+    await page.reload();
+    await expect(page.getByTestId('question')).toBeVisible();
+    expect(await timerSeconds(page)).toBeLessThanOrEqual(before);
+    await page.clock.fastForward('05:00');
+    await expect(page.getByTestId('summary')).toBeVisible();
+  });
+
+  for (const [name, value] of [
+    ['unparseable', '{broken'],
+    ['inconsistent', JSON.stringify({ version: 3, phase: 'result', answers: [] })],
+  ]) {
+    test(`${name} saved data found on load starts a clean session without errors`, async ({ page }) => {
+      const errors = [];
+      page.on('pageerror', (error) => errors.push(error));
+      // Written before the app's scripts run, as if edited while no quiz tab was open.
+      await page.addInitScript(([key, raw]) => localStorage.setItem(key, raw), [STORAGE_KEY, value]);
+      await page.reload();
+      await expect(page.getByTestId('preparation')).toBeVisible();
+      await expect(page.getByTestId('timer')).toHaveAttribute('data-phase', 'preparation');
+      expect(errors).toEqual([]);
+    });
+  }
+});
+
 test('layout has no horizontal overflow in any phase', async ({ page }) => {
   const overflow = () => page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
   expect(await overflow()).toBeLessThanOrEqual(0);

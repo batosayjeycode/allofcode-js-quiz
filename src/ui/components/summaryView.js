@@ -8,6 +8,22 @@ const END_REASONS = {
   timeout: `${icons.clock(14)} Time's up`,
 };
 
+/** "45s", "3m 05s" */
+function formatAway(ms) {
+  const total = Math.round(Math.max(0, ms) / 1000);
+  const minutes = Math.floor(total / 60);
+  const seconds = total % 60;
+  return minutes ? `${minutes}m ${String(seconds).padStart(2, '0')}s` : `${seconds}s`;
+}
+
+function renderTabSwitches(state) {
+  const count = state.tabSwitches ?? 0;
+  const text = count
+    ? `${icons.alert(14)} Left the quiz tab ${count} time${count === 1 ? '' : 's'} · ${formatAway(state.hiddenMs ?? 0)} away`
+    : `${icons.check(14)} Stayed on the quiz tab the whole time`;
+  return `<p class="${cx('summary-note', !count && 'summary-note--ok')}" data-testid="tab-switches" data-count="${count}">${text}</p>`;
+}
+
 function stat(label, value, testId, tone) {
   return `<div class="${cx('stat', tone && `stat--${tone}`)}"><span class="stat__value" data-testid="${testId}">${value}</span><span class="stat__label">${label}</span></div>`;
 }
@@ -55,6 +71,7 @@ export function renderSummaryView({ questions, state, summary, confirmRestart })
         ${stat('Score', `${summary.earnedPoints} / ${summary.totalPoints}`, 'summary-points')}
       </div>
       ${unansweredNote}
+      ${renderTabSwitches(state)}
 
       <div class="table-wrap">
         <table class="summary-table">
