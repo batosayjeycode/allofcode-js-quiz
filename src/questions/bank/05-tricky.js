@@ -5,8 +5,7 @@ export default [
     id: 'JS-009',
     title: 'Losing `this` in Strict Mode',
     category: 'Functions',
-    difficulty: 'Advanced',
-    points: 3,
+    difficulty: 'Hard',
     tags: ['this', 'strict mode', 'execution context'],
     description: 'A method is extracted from its object and called on its own. What happens?',
     code: `
@@ -36,8 +35,7 @@ export default [
     id: 'JS-010',
     title: 'return Inside finally',
     category: 'Error Handling',
-    difficulty: 'Advanced',
-    points: 3,
+    difficulty: 'Hard',
     tags: ['try/catch/finally', 'control flow'],
     description: 'Both the catch and the finally block return a value. What is printed?',
     code: `

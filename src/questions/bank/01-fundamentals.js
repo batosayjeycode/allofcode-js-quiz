@@ -5,8 +5,7 @@ export default [
     id: 'JS-001',
     title: 'Implicit Type Coercion',
     category: 'JavaScript Fundamentals',
-    difficulty: 'Basic',
-    points: 1,
+    difficulty: 'Easy',
     tags: ['coercion', 'operators'],
     description: 'Each expression mixes strings, numbers and booleans. What does the console print?',
     code: `
@@ -26,8 +25,7 @@ export default [
     id: 'JS-002',
     title: 'Shallow Copy with Object Spread',
     category: 'Array & Object',
-    difficulty: 'Intermediate',
-    points: 2,
+    difficulty: 'Medium',
     tags: ['references', 'mutation', 'spread'],
     description: 'A copy is created with the spread operator and then modified. What is logged for the original object?',
     code: `

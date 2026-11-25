@@ -551,3 +551,71 @@ describe('anti-cheat: tab visibility', () => {
     });
   });
 });
+
+describe('randomized order in the session', () => {
+  const KEY = 'js-quiz:session';
+  const seeded = (seed) => {
+    let a = seed >>> 0;
+    return () => {
+      a = (a + 0x6d2b79f5) >>> 0;
+      let t = Math.imul(a ^ (a >>> 15), a | 1);
+      t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  };
+  const many = Array.from({ length: 8 }, (_, i) => makeQuestion(`M${i + 1}`));
+
+  it('deals an order once and keeps it across reloads and tabs', () => {
+    const storage = memoryStorage();
+    const clock = fakeClock();
+    const first = createSessionStore(many, { storage, now: clock, random: seeded(7) });
+    const { questionOrder, optionOrder } = first.getState();
+    expect(questionOrder).not.toEqual(many.map((q) => q.id));
+
+    // A reload or another tab uses a different random source, but must keep the saved order.
+    for (const seed of [1, 2, 3]) {
+      clock.advance(MINUTE);
+      const state = createSessionStore(many, { storage, now: clock, random: seeded(seed) }).getState();
+      expect(state.questionOrder).toEqual(questionOrder);
+      expect(state.optionOrder).toEqual(optionOrder);
+    }
+  });
+
+  it('deals a new order only when a finished quiz is restarted', () => {
+    const clock = fakeClock();
+    const store = createSessionStore(many, { now: clock, random: seeded(11) });
+    const { questionOrder } = store.getState();
+    clock.advance(PREPARATION_MS);
+    store.dispatch({ type: 'selectDuration', minutes: 5 });
+    expect(store.getState().questionOrder).toEqual(questionOrder);
+    clock.advance(5 * MINUTE);
+    store.dispatch({ type: 'restart' });
+    expect(store.getState().phase).toBe('preparation');
+    expect(store.getState().questionOrder).not.toEqual(questionOrder);
+  });
+
+  it('rejects a saved session whose order was tampered with', () => {
+    const storage = memoryStorage();
+    const clock = fakeClock();
+    const saved = createSessionStore(many, { storage, now: clock }).getState();
+    storage.setItem(KEY, JSON.stringify({ ...saved, questionOrder: saved.questionOrder.slice(1) }));
+    expect(createSessionStore(many, { storage, now: clock }).getState().sessionId).not.toBe(saved.sessionId);
+  });
+
+  it('carries over a session saved before randomization, in the authored order', () => {
+    const storage = memoryStorage();
+    const store = quizStore({ storage });
+    answer(store, 'Q1', 'A');
+    const v3 = { ...store.getState(), version: 3 };
+    delete v3.questionOrder;
+    delete v3.optionOrder;
+    storage.setItem(KEY, JSON.stringify(v3));
+
+    const restored = createSessionStore(questions, { storage, now: store.clock }).getState();
+    expect(restored).toMatchObject({ version: 4, phase: 'quiz', sessionId: v3.sessionId, quizEndsAt: v3.quizEndsAt });
+    expect(restored.questionOrder).toEqual(['Q1', 'Q2', 'Q3']);
+    expect(restored.optionOrder.Q1).toEqual(['A', 'B', 'C']);
+    expect(restored.answers.Q1.status).toBe('done');
+    expect(JSON.parse(storage.data.get(KEY)).version).toBe(4); // re-saved in the new format
+  });
+});

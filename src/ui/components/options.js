@@ -17,12 +17,13 @@ export function renderOptions({ question, answer }) {
   const items = question.options
     .map((option) => {
       const state = optionState(option, answer);
+      const key = option.key ?? option.id; // display letter for the session's shuffled order
       const lines = option.display.map((line) => `<span class="out-line">${escapeHtml(line)}</span>`).join('');
       return `
-        <label class="${cx('option', state.tone && `option--${state.tone}`, locked && 'is-locked')}" data-testid="option" data-option-id="${option.id}">
+        <label class="${cx('option', state.tone && `option--${state.tone}`, locked && 'is-locked')}" data-testid="option" data-option-id="${option.id}" data-option-key="${key}">
           <input type="radio" name="answer" value="${option.id}" ${state.selected ? 'checked' : ''} ${locked ? 'disabled' : ''}
-            aria-label="Option ${option.id}: ${escapeHtml(option.display.join(', '))}" />
-          <span class="option__key" aria-hidden="true">${option.id}</span>
+            aria-label="Option ${key}: ${escapeHtml(option.display.join(', '))}" />
+          <span class="option__key" aria-hidden="true">${key}</span>
           <span class="option__body">${lines}</span>
           ${state.badge ? `<span class="option__badge">${state.badge}</span>` : ''}
         </label>`;

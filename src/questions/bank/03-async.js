@@ -5,8 +5,7 @@ export default [
     id: 'JS-005',
     title: 'Promise Executor Timing',
     category: 'Async JavaScript',
-    difficulty: 'Intermediate',
-    points: 2,
+    difficulty: 'Medium',
     tags: ['promises', 'execution order'],
     description: 'In which order are the letters printed?',
     code: `
@@ -39,8 +38,7 @@ export default [
     id: 'JS-006',
     title: 'Missing await in try/catch',
     category: 'Async JavaScript',
-    difficulty: 'Advanced',
-    points: 3,
+    difficulty: 'Hard',
     tags: ['async/await', 'error handling', 'unhandled rejection'],
     description: 'An async function throws inside a try/catch block. What is the observable result?',
     code: `

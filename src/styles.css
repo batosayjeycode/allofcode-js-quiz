@@ -966,7 +966,7 @@ kbd {
 }
 .stats {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(6, minmax(0, 1fr));
   gap: 10px;
 }
 .stat {
@@ -1058,6 +1058,111 @@ kbd {
   display: flex;
   justify-content: space-between;
   gap: 12px;
+}
+
+/* ==========================================================================
+   Assessment: interviewer summary and answer review
+   ========================================================================== */
+.assessment {
+  display: grid;
+  gap: 14px;
+  padding: 22px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.assessment__head {
+  display: grid;
+  gap: 6px;
+}
+.assessment__head p {
+  font-size: 14px;
+  line-height: 1.55;
+}
+.assessment__grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+}
+.assessment__subtitle {
+  margin-bottom: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+.assessment__list {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding-left: 18px;
+  font-size: 14px;
+  line-height: 1.5;
+}
+.assessment__list--spaced {
+  gap: 10px;
+}
+.assessment__refs {
+  display: block;
+  margin-top: 2px;
+}
+
+.review {
+  display: grid;
+  gap: 10px;
+}
+.review-item {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.review-item--correct {
+  border-left: 3px solid var(--success);
+}
+.review-item--incorrect {
+  border-left: 3px solid var(--danger);
+}
+.review-item__summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  padding: 12px 16px;
+  cursor: pointer;
+}
+.review-item__title {
+  flex: 1 1 220px;
+  font-weight: 600;
+}
+.review-item__points {
+  font-size: 13px;
+  color: var(--text-muted);
+}
+.review-item__body {
+  display: grid;
+  gap: 14px;
+  padding: 4px 16px 16px;
+}
+.review-answers {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin: 0;
+}
+.review-answers dt {
+  margin-bottom: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+.review-answers dd {
+  margin: 0;
+}
+.review-answer {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
 }
 
 /* ==========================================================================
@@ -1278,6 +1383,10 @@ kbd {
   }
   .stats {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .assessment__grid,
+  .review-answers {
+    grid-template-columns: minmax(0, 1fr);
   }
   .summary-table .hide-sm {
     display: none;

@@ -19,11 +19,15 @@
  * - Persisted data is validated on load and every new state is validated
  *   before it is saved. Invalid or stale data starts a clean session.
  *
+ * Each session is dealt a random question and option order when it is created
+ * (see order.js); the order is saved with the session and never reshuffled.
+ *
  * Answer lifecycle per question:  idle (option selectable) -> running -> done (locked)
  */
 import { evaluateAnswer } from '../engine/validator.js';
+import { createSessionOrder, identityOrder, isValidOrder, secureRandom } from './order.js';
 
-const STORAGE_VERSION = 3;
+const STORAGE_VERSION = 4;
 
 export const PREPARATION_MS = 5 * 60_000;
 export const QUIZ_DURATIONS = Object.freeze([5, 10, 15]); // minutes
@@ -37,11 +41,12 @@ export const STALE_SESSION_MS = 24 * 60 * 60_000;
 const newSessionId = () =>
   globalThis.crypto?.randomUUID?.() ?? `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
 
-export function createInitialState(questions, now = Date.now()) {
+export function createInitialState(questions, now = Date.now(), random = secureRandom) {
   return {
     version: STORAGE_VERSION,
     sessionId: newSessionId(),
     questionIds: questions.map((q) => q.id),
+    ...createSessionOrder(questions, random),
     phase: 'preparation',
     startedAt: now,
     updatedAt: now,
@@ -84,7 +89,7 @@ export function applyDeadlines(state, now) {
   return state;
 }
 
-export function createReducer(questions) {
+export function createReducer(questions, { random = secureRandom } = {}) {
   const byId = new Map(questions.map((q) => [q.id, q]));
   const lastIndex = questions.length - 1;
   const allDone = (answers) => questions.every((q) => answers[q.id]?.status === 'done');
@@ -172,7 +177,7 @@ export function createReducer(questions) {
 
       case 'restart':
         // Only a finished quiz can be restarted; otherwise a restart would reset the timers.
-        return state.phase === 'result' ? createInitialState(questions, action.now) : state;
+        return state.phase === 'result' ? createInitialState(questions, action.now, random) : state;
 
       default: // 'tick', 'sync': deadlines were already applied
         return state;
@@ -199,6 +204,7 @@ export function validateState(s, questions) {
   if (typeof s.sessionId !== 'string' || !s.sessionId || !PHASES.includes(s.phase)) return false;
   if (!isTimestamp(s.startedAt) || !isTimestamp(s.updatedAt) || s.updatedAt < s.startedAt) return false;
   if (s.preparationEndsAt !== s.startedAt + PREPARATION_MS) return false;
+  if (!isValidOrder(s, questions)) return false;
   if (!Number.isInteger(s.currentIndex) || s.currentIndex < 0 || s.currentIndex >= ids.length) return false;
   if (!isCount(s.tabSwitches) || !Number.isFinite(s.hiddenMs) || s.hiddenMs < 0) return false;
   if (s.hiddenSince !== null && (s.phase !== 'quiz' || !isTimestamp(s.hiddenSince))) return false;
@@ -250,7 +256,12 @@ function isStale(s, now) {
  * another question set, or is stale. Scores are recomputed from the stored
  * execution results rather than trusted.
  */
-export function hydrateState(saved, questions, now = Date.now()) {
+export function hydrateState(stored, questions, now = Date.now()) {
+  // Sessions saved before randomization (version 3) keep the authored order.
+  const saved =
+    stored?.version === 3 && stored.questionOrder === undefined
+      ? { ...stored, version: STORAGE_VERSION, ...identityOrder(questions) }
+      : stored;
   if (!validateState(saved, questions) || isStale(saved, now)) return null;
   const byId = new Map(questions.map((q) => [q.id, q]));
   const answers = {};
@@ -265,10 +276,13 @@ export function hydrateState(saved, questions, now = Date.now()) {
 
 /**
  * @param {Array} questions
- * @param {{ storage?: Storage | null, storageKey?: string, now?: () => number }} [options]
+ * @param {{ storage?: Storage | null, storageKey?: string, now?: () => number, random?: () => number }} [options]
  */
-export function createSessionStore(questions, { storage = null, storageKey = 'js-quiz:session', now = Date.now } = {}) {
-  const reduce = createReducer(questions);
+export function createSessionStore(
+  questions,
+  { storage = null, storageKey = 'js-quiz:session', now = Date.now, random = secureRandom } = {},
+) {
+  const reduce = createReducer(questions, { random });
   const listeners = new Set();
   const clockKey = `${storageKey}:clock`;
 
@@ -325,8 +339,9 @@ export function createSessionStore(questions, { storage = null, storageKey = 'js
   {
     const raw = read(storageKey);
     const restored = resolve(raw);
-    state = applyDeadlines(restored ?? createInitialState(questions, clock()), clock());
-    if (restored && state === restored) lastRaw = raw;
+    state = applyDeadlines(restored ?? createInitialState(questions, clock(), random), clock());
+    // Re-save when loading changed anything (deadlines applied, older version migrated).
+    if (restored && state === restored && raw === JSON.stringify(restored)) lastRaw = raw;
     else write(state);
   }
 

@@ -5,7 +5,7 @@ import { icons } from './icons.js';
 import { renderOptions } from './options.js';
 import { renderConsole, renderExplanation, renderVerdict } from './resultPanel.js';
 
-const DIFFICULTY_TONE = { Basic: 'easy', Intermediate: 'medium', Advanced: 'hard', Expert: 'expert' };
+const DIFFICULTY_TONE = { Easy: 'easy', Medium: 'medium', Hard: 'hard' };
 
 function renderRunBar(answer) {
   const status = answer?.status;
