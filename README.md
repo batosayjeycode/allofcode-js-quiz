@@ -38,7 +38,7 @@ src/
     bank/*.js          the question files; every file here is loaded automatically
     helpers.js         output() / values() / throws() / timesOut() authoring helpers
     schema.js          validation & normalisation of questions
-  state/             phase state machine + store (+ sessionStorage), deadline ticker, scoring
+  state/             phase state machine + store (+ localStorage), deadline ticker, scoring
   ui/                rendering only: components, highlighter, markdown, app shell
 ```
 
@@ -59,8 +59,29 @@ preparation (5 min, read-only) → durationSelection (5 / 10 / 15 min) → quiz 
 Timers are deadline based: the state stores absolute timestamps, and every action is stamped with the current time.
 The reducer applies any deadline that has passed *before* handling an action, so a throttled background tab, a late
 tick or a reload can never extend a phase or let a late answer count. A single ticker (`src/state/timer.js`) checks
-the clock every 250 ms and again on `visibilitychange`, `focus` and `pageshow`. The session, including its deadlines,
-is saved to `sessionStorage`, so a refresh resumes where it left off with the clock still running.
+the clock every 250 ms and again on `visibilitychange`, `focus` and `pageshow`, and any click re-checks it too.
+
+### Anti-cheat
+
+- **One saved session.** The session (phase, deadlines, duration, answers) is kept in `localStorage`, so reloading,
+  closing the tab or opening a new tab resumes it with the clock still running. An active quiz can't be restarted.
+- **Tabs share it.** Every change re-reads storage first and retries if another tab wrote in between, so all tabs
+  show the same session and a stale tab can't overwrite a newer state (such as a finished result).
+- **Clock can't go backwards.** The store keeps a persisted high-water mark of the time it has seen, so moving the
+  system clock back doesn't add time.
+- **Back/forward.** During the quiz a guard history entry keeps the user on the page, and the view always follows the
+  saved phase, so navigating back into the app after the quiz shows the result.
+- **Tab switches.** Hiding the quiz tab (switching tabs, minimizing, reloading) is counted, with the time away, and
+  shown on the result. The timer is never paused.
+- **Integrity.** Saved data is validated on load (structure, deadlines that match the chosen duration, answers that
+  fit the phase) and every new state is validated before it is saved. Scores are recomputed from the stored execution
+  results. Invalid data, or a session untouched for 24 hours outside an active quiz, starts a clean session; if storage
+  is cleared or corrupted while a quiz tab is open, it is rewritten from memory.
+- **Interrupted runs.** A run cut off by a reload stays locked and is re-run automatically, so the answer can't be
+  changed. Async run results are tagged with their session and ignored after the quiz ends.
+
+These are client-side protections. Someone who edits storage or the app with developer tools *before* opening the
+quiz can still get a fresh session; preventing that needs a server.
 
 ### Execution sandbox
 

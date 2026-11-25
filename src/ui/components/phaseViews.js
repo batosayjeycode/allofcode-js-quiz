@@ -75,6 +75,10 @@ export function renderDurationView({ durations }) {
           The timer starts as soon as you choose and can't be changed afterwards. The quiz ends when every question has
           been run or the time runs out. Questions you haven't run by then count as unanswered.
         </p>
+        <p class="phase__text">
+          Leaving the tab or reloading doesn't pause the timer, and each time you leave the quiz tab is shown on your
+          result.
+        </p>
       </header>
       <div class="duration-options" role="group" aria-label="Quiz duration">${buttons}</div>
     </section>`;
