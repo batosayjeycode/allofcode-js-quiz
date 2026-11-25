@@ -1469,9 +1469,29 @@ kbd {
   .content {
     padding: 0;
   }
+  /* Block (not grid) layout: Chrome fragments block boxes across pages far more
+     reliably, so long sections can start on one page and continue on the next. */
+  .summary,
+  .assessment,
+  .review,
+  .review-item,
+  .review-item__body {
+    display: block;
+  }
   .summary {
     max-width: none;
-    gap: 14px;
+    /* Screen sizes are generous; a slightly smaller report fits more per page. */
+    zoom: 0.85;
+  }
+  .summary > * + * {
+    margin-top: 14px;
+  }
+  .assessment > * + *,
+  .review-item__body > * + * {
+    margin-top: 12px;
+  }
+  .review > * + * {
+    margin-top: 10px;
   }
 
   .print-report {
@@ -1543,9 +1563,16 @@ kbd {
   li {
     break-inside: avoid;
   }
-  .review-item {
-    break-inside: avoid-page;
+  /* A review may continue on the next page, but only between its parts, never
+     through its heading row, code, answers or explanation. */
+  .review-item__summary,
+  .review-answers,
+  .explanation {
+    break-inside: avoid;
   }
+  /* Keep a question's heading, topic line and description with its code. */
+  .review-item__summary,
+  .review-item__body > p,
   .review > .section-title,
   .assessment__subtitle {
     break-after: avoid;
