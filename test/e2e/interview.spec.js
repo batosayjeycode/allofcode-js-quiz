@@ -512,6 +512,20 @@ test.describe('export PDF', () => {
     await expect(page.getByTestId('interviewer-summary')).toBeVisible();
     await expect(page.getByTestId('review-correct').first()).toBeVisible();
 
+    // Page-break rules: block layout so long sections can continue on the next page,
+    // and a question's heading is never split or left alone at the bottom of a page.
+    const printStyles = await page.evaluate(() => {
+      const css = (selector) => getComputedStyle(document.querySelector(selector));
+      return {
+        summary: css('.summary').display,
+        review: css('.review-item').display,
+        headingInside: css('.review-item__summary').breakInside,
+        headingAfter: css('.review-item__summary').breakAfter,
+        answers: css('.review-answers').breakInside,
+      };
+    });
+    expect(printStyles).toEqual({ summary: 'block', review: 'block', headingInside: 'avoid', headingAfter: 'avoid', answers: 'avoid' });
+
     const pdf = await page.pdf({ format: 'A4', printBackground: true, preferCSSPageSize: true });
     expect(pdf.subarray(0, 5).toString()).toBe('%PDF-');
     expect(pdf.length).toBeGreaterThan(50_000);
