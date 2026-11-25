@@ -5,8 +5,7 @@ export default [
     id: 'JS-003',
     title: 'Temporal Dead Zone & Shadowing',
     category: 'Scope & Hoisting',
-    difficulty: 'Intermediate',
-    points: 2,
+    difficulty: 'Medium',
     tags: ['let', 'hoisting', 'tdz'],
     description: 'A function reads a variable that also exists in the outer scope. What happens when it runs?',
     code: `
@@ -31,8 +30,7 @@ export default [
     id: 'JS-004',
     title: 'Closures in Loops: var vs let',
     category: 'Scope & Hoisting',
-    difficulty: 'Intermediate',
-    points: 2,
+    difficulty: 'Medium',
     tags: ['closures', 'var', 'let'],
     description: 'Two loops create callbacks that capture the loop variable. What do the two arrays contain?',
     code: `

@@ -83,6 +83,25 @@ the clock every 250 ms and again on `visibilitychange`, `focus` and `pageshow`, 
 These are client-side protections. Someone who edits storage or the app with developer tools *before* opening the
 quiz can still get a fresh session; preventing that needs a server.
 
+### Assessment mode
+
+- **Randomized per session.** When a session starts it deals a random question order and, for each question, a
+  random option order (`src/state/order.js`, using `crypto.getRandomValues`). The order is saved with the session, so
+  reloads and other tabs show the same order; only Restart (after a finished quiz) deals a new one. Options keep
+  their authored ids internally, so the answer key and scoring are unaffected; the letters A–D on screen and the
+  keyboard shortcuts follow the displayed position.
+- **Scoring by difficulty.** Easy / Medium / Hard are worth 1 / 2 / 3 points by default, configurable in
+  `src/assessment.config.js`. Accuracy is correct ÷ answered, so unanswered questions lower the score but not the
+  accuracy.
+- **Result page.** Score / maximum, accuracy, correct / incorrect / unanswered, completion status (Completed / Time
+  expired), time spent, tab switches, and a per-question review with the candidate's answer, the correct answer, the
+  explanation, difficulty and points.
+- **Interviewer summary** (`src/state/assessment.js`). Built from the answers with fixed rules, no AI: overall
+  performance, strengths (topics answered fully correctly), areas for improvement (topics with incorrect or
+  unanswered questions, most incorrect first), a breakdown by difficulty, follow-up topics from per-category prompts in
+  `src/assessment.config.js`, and notes on time and tab switches. Topics and questions are sorted by name and id, so the
+  same answers always give the same summary, whatever order they were shown in.
+
 ### Execution sandbox
 
 - Code runs in a **dedicated Web Worker created per run** — never in the page context. The worker
@@ -116,8 +135,8 @@ export default [
     id: 'JS-011',                       // unique
     title: 'Optional chaining',
     category: 'Operators',
-    difficulty: 'Intermediate',         // Basic | Intermediate | Advanced | Expert
-    points: 2,                          // optional, default 1
+    difficulty: 'Medium',               // Easy | Medium | Hard (default Medium; Basic/Intermediate/Advanced/Expert still accepted)
+    points: 2,                          // optional: overrides the difficulty's points (src/assessment.config.js)
     description: 'What is printed?',
     code: `
       const user = {};
@@ -129,7 +148,7 @@ export default [
       throws('TypeError'),              // code throws (optionally { logs, messageIncludes })
       values(null),                     // logged values compared structurally
     ],
-    answer: 'A',                        // option ids are assigned A, B, C, … in order
+    answer: 'A',                        // option ids are assigned A, B, C, … in authored order (shown shuffled)
     explanation: 'Markdown-lite: `code`, **bold**, *italic*, "- " and "1." lists.',
   },
 ];

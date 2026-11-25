@@ -6,6 +6,7 @@
  * exception: it is updated in place every tick so focus and scroll survive.
  */
 import { computeSummary } from '../state/scoring.js';
+import { createOrderedQuestions } from '../state/order.js';
 import { QUIZ_DURATIONS, RUN_STALE_MS } from '../state/session.js';
 import { createTicker, formatCountdown, remainingMs } from '../state/timer.js';
 import { renderHeader } from './components/header.js';
@@ -46,7 +47,10 @@ export function mountApp(root, { questions, store, execute }) {
   const ui = { confirmRestart: false, confirmTimer: null };
   const ownRuns = new Set(); // question ids this tab is executing right now
 
-  const currentQuestion = () => questions[store.getState().currentIndex];
+  // The session's randomized order (stable for the whole session, across reloads and tabs).
+  const orderedQuestions = createOrderedQuestions(questions);
+  const sessionQuestions = () => orderedQuestions(store.getState());
+  const currentQuestion = () => sessionQuestions()[store.getState().currentIndex];
 
   function deadlineFor(state) {
     if (state.phase === 'preparation') return state.preparationEndsAt;
@@ -84,6 +88,7 @@ export function mountApp(root, { questions, store, execute }) {
 
   function render({ scrollTop = false } = {}) {
     const state = store.getState();
+    const questions = sessionQuestions();
     const summary = computeSummary(questions, state.answers);
     const focusedOption = document.activeElement?.matches?.('input[name="answer"]');
 
@@ -235,11 +240,10 @@ export function mountApp(root, { questions, store, execute }) {
       return;
     }
     if (event.ctrlKey || event.metaKey || event.altKey) return;
-    const optionId = event.key.length === 1 ? event.key.toUpperCase() : '';
-    const question = currentQuestion();
-    if (question.options.some((option) => option.id === optionId)) {
-      store.dispatch({ type: 'selectOption', questionId: question.id, optionId });
-    }
+    // Letter keys follow the displayed (shuffled) letters.
+    const key = event.key.length === 1 ? event.key.toUpperCase() : '';
+    const option = currentQuestion().options.find((o) => o.key === key);
+    if (option) store.dispatch({ type: 'selectOption', questionId: currentQuestion().id, optionId: option.id });
   }
 
   // Leaving mid-quiz doesn't pause or reset anything (the session is saved), but

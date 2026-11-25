@@ -9,7 +9,23 @@ for (const file of readdirSync(bankDir).filter((f) => f.endsWith('.js'))) {
   modules[file] = await import(new URL(file, bankDir).href);
 }
 const questions = loadQuestionBank(modules);
+const byId = new Map(questions.map((q) => [q.id, q]));
 const wrongOption = (q) => q.options.find((o) => o.id !== q.answer).id;
+
+// Questions and options are shuffled per session, so tests read the order from the page.
+// Options are located by their stable id (data-option-id); the visible letter is data-option-key.
+
+/** The bank entry for the question currently on screen. */
+async function currentQuestion(page) {
+  return byId.get(await page.getByTestId('question').getAttribute('data-question-id'));
+}
+
+/** Question ids in this session's order (from the sidebar). */
+const sessionOrder = (page) => page.getByTestId('nav-item').evaluateAll((els) => els.map((el) => el.dataset.questionId));
+
+/** Display letter of an option on the current question. */
+const displayKey = (page, optionId) =>
+  page.locator(`[data-testid="option"][data-option-id="${optionId}"]`).getAttribute('data-option-key');
 
 async function answerCurrent(page, optionId) {
   await page.locator(`[data-testid="option"][data-option-id="${optionId}"]`).click();
@@ -77,8 +93,11 @@ test.describe('preparation and duration selection', () => {
 
 test('every question executes in the browser sandbox; answering them all ends the quiz', async ({ page }) => {
   await startQuiz(page);
+  const order = await sessionOrder(page);
+  expect([...order].sort()).toEqual(questions.map((q) => q.id).sort());
   const last = questions.length - 1;
-  for (const [index, question] of questions.entries()) {
+  for (const [index, id] of order.entries()) {
+    const question = byId.get(id);
     await expect(page.getByTestId('question')).toHaveAttribute('data-question-id', question.id);
     await expect(page.getByTestId('question-number')).toHaveText(`Question ${index + 1} of ${questions.length}`);
     if (index === last) break;
@@ -91,7 +110,7 @@ test('every question executes in the browser sandbox; answering them all ends th
   await expect(page.getByTestId('next-button')).toBeDisabled();
 
   // Running the last unanswered question ends the quiz: no "Finish" click, the result opens on its own.
-  await page.locator(`[data-testid="option"][data-option-id="${questions[last].answer}"]`).click();
+  await page.locator(`[data-testid="option"][data-option-id="${byId.get(order[last]).answer}"]`).click();
   await page.getByTestId('run-button').click();
   await expect(page.getByTestId('summary')).toBeVisible({ timeout: 10_000 });
   await expect(page.getByTestId('summary-row').nth(last)).toHaveAttribute('data-status', 'correct');
@@ -103,20 +122,22 @@ test('every question executes in the browser sandbox; answering them all ends th
 
 test('gates Run Code on a selection, locks the answer and reveals the explanation only after running', async ({ page }) => {
   await startQuiz(page);
-  const q = questions[0];
+  const q = await currentQuestion(page);
   const run = page.getByTestId('run-button');
   await expect(run).toBeDisabled();
   await expect(page.getByTestId('explanation')).toHaveCount(0);
   await expect(page.getByTestId('console')).toHaveCount(0);
 
   const wrong = wrongOption(q);
+  const [wrongKey, rightKey] = [await displayKey(page, wrong), await displayKey(page, q.answer)];
   await page.locator(`[data-option-id="${wrong}"]`).click();
   await expect(run).toBeEnabled();
   await run.click();
 
   const verdict = page.getByTestId('verdict');
   await expect(verdict).toHaveAttribute('data-correct', 'false');
-  await expect(verdict).toContainText(`You chose option ${wrong}, but the code actually produced option ${q.answer}`);
+  // The verdict uses the letters the candidate sees, not the internal ids.
+  await expect(verdict).toContainText(`You chose option ${wrongKey}, but the code actually produced option ${rightKey}`);
   await expect(page.getByTestId('explanation')).toBeVisible();
   await expect(page.locator('input[name="answer"]').first()).toBeDisabled();
   await expect(page.locator(`[data-option-id="${q.answer}"]`)).toHaveClass(/option--actual/);
@@ -127,8 +148,7 @@ test('gates Run Code on a selection, locks the answer and reveals the explanatio
 
 test('shows runtime errors distinctly in the console', async ({ page }) => {
   await startQuiz(page);
-  const index = questions.findIndex((q) => q.id === 'JS-003');
-  await page.getByTestId('nav-item').nth(index).click();
+  await page.locator('[data-testid="nav-item"][data-question-id="JS-003"]').click();
   await answerCurrent(page, 'A');
   await expect(page.getByTestId('console')).toHaveAttribute('data-status', 'error');
   await expect(page.getByTestId('console-error')).toContainText('Uncaught ReferenceError');
@@ -136,29 +156,32 @@ test('shows runtime errors distinctly in the console', async ({ page }) => {
 
 test('shows async unhandled rejections with prior output', async ({ page }) => {
   await startQuiz(page);
-  const index = questions.findIndex((q) => q.id === 'JS-006');
-  await page.getByTestId('nav-item').nth(index).click();
+  await page.locator('[data-testid="nav-item"][data-question-id="JS-006"]').click();
   await answerCurrent(page, 'C');
   await expect(page.getByTestId('console')).toContainText('got object');
   await expect(page.getByTestId('console-error')).toContainText('Uncaught (in promise) Error: boom');
   await expect(page.getByTestId('verdict')).toHaveAttribute('data-correct', 'true');
 });
 
-test('keyboard: letter keys select, Ctrl+Enter runs', async ({ page }) => {
+test('keyboard: letter keys select by displayed letter, Ctrl+Enter runs', async ({ page }) => {
   await startQuiz(page);
-  await page.keyboard.press(questions[0].answer.toLowerCase());
+  const q = await currentQuestion(page);
+  await page.keyboard.press((await displayKey(page, q.answer)).toLowerCase());
+  await expect(page.locator(`[data-option-id="${q.answer}"] input`)).toBeChecked();
   await page.keyboard.press('Control+Enter');
   await expect(page.getByTestId('verdict')).toHaveAttribute('data-correct', 'true');
 });
 
 test('navigation, persistence, and the timer ending the quiz with a mixed score', async ({ page }) => {
   await startQuiz(page, 15);
+  const order = await sessionOrder(page);
   await expect(page.getByTestId('prev-button')).toBeDisabled();
   let expectedPoints = 0;
   let correct = 0;
   // Answer the first 6 questions: correct on even indexes, wrong on odd; leave 4 unanswered.
   for (let i = 0; i < 6; i += 1) {
-    const q = questions[i];
+    const q = byId.get(order[i]);
+    await expect(page.getByTestId('question')).toHaveAttribute('data-question-id', q.id);
     const isRight = i % 2 === 0;
     await answerCurrent(page, isRight ? q.answer : wrongOption(q));
     if (isRight) {
@@ -173,15 +196,16 @@ test('navigation, persistence, and the timer ending the quiz with a mixed score'
 
   // Previous navigation and review of a completed question
   await page.getByTestId('prev-button').click();
-  await expect(page.getByTestId('question')).toHaveAttribute('data-question-id', questions[5].id);
+  await expect(page.getByTestId('question')).toHaveAttribute('data-question-id', order[5]);
   await expect(page.getByTestId('verdict')).toBeVisible();
 
   // Survives a reload (the leave-page prompt is accepted); the deadline is kept.
   page.on('dialog', (dialog) => dialog.accept());
   await page.reload();
   await expect(page.getByTestId('progress-count')).toHaveText('6');
-  await expect(page.getByTestId('question')).toHaveAttribute('data-question-id', questions[5].id);
+  await expect(page.getByTestId('question')).toHaveAttribute('data-question-id', order[5]);
   await expect(page.getByTestId('timer')).toHaveAttribute('data-phase', 'quiz');
+  expect(await sessionOrder(page)).toEqual(order); // no reshuffle on reload
 
   const statuses = await page.getByTestId('nav-item').evaluateAll((els) => els.map((el) => el.dataset.status));
   expect(statuses).toEqual(['correct', 'incorrect', 'correct', 'incorrect', 'correct', 'incorrect', 'selected', 'unanswered', 'unanswered', 'unanswered']);
@@ -200,7 +224,11 @@ test('navigation, persistence, and the timer ending the quiz with a mixed score'
   await expect(page.getByTestId('summary-unanswered')).toHaveText('4');
   await expect(page.getByTestId('summary-points')).toHaveText(`${expectedPoints} / ${totalPoints}`);
   await expect(page.getByTestId('summary-percentage')).toHaveText(`${pct}%`);
+  await expect(page.getByTestId('summary-accuracy')).toHaveText('50%'); // 3 of 6 answered; unanswered excluded
+  await expect(page.getByTestId('completion-status')).toHaveText('Time expired');
+  await expect(page.getByTestId('summary-time')).toHaveText('15m 00s');
   await expect(page.getByTestId('summary-row')).toHaveCount(10);
+  expect(await page.getByTestId('summary-row').evaluateAll((els) => els.map((el) => el.dataset.questionId))).toEqual(order);
 
   // The finished quiz is read-only: no way back to the questions, and inputs do nothing.
   await expect(page.getByRole('button', { name: /Review|Back to questions/ })).toHaveCount(0);
@@ -223,7 +251,7 @@ test('navigation, persistence, and the timer ending the quiz with a mixed score'
 
 test('a long pause (throttled or hidden tab) still ends the quiz at its deadline', async ({ page }) => {
   await startQuiz(page, 5);
-  await answerCurrent(page, questions[0].answer);
+  await answerCurrent(page, (await currentQuestion(page)).answer);
   await page.clock.fastForward('30:00');
   await expect(page.getByTestId('summary')).toBeVisible();
   await expect(page.getByTestId('end-reason')).toHaveAttribute('data-reason', 'timeout');
@@ -244,7 +272,7 @@ test.describe('anti-cheat', () => {
 
   test('back and forward navigation cannot leave the active quiz', async ({ page }) => {
     await startQuiz(page, 10);
-    await answerCurrent(page, questions[0].answer);
+    await answerCurrent(page, (await currentQuestion(page)).answer);
     const url = page.url();
     await page.goBack();
     await expect(page.getByTestId('question')).toBeVisible();
@@ -258,7 +286,7 @@ test.describe('anti-cheat', () => {
 
   test('leaving the site and coming back resumes the quiz with the clock still running, then only the result', async ({ page }) => {
     await startQuiz(page, 5);
-    await answerCurrent(page, questions[0].answer);
+    await answerCurrent(page, (await currentQuestion(page)).answer);
     const before = await timerSeconds(page);
 
     page.on('dialog', (dialog) => dialog.accept());
@@ -300,18 +328,21 @@ test.describe('anti-cheat', () => {
 
   test('a second tab joins the same session, and finishing in one tab ends it in both', async ({ page, context }) => {
     await startQuiz(page, 15);
-    await answerCurrent(page, questions[0].answer);
+    await answerCurrent(page, (await currentQuestion(page)).answer);
 
     const second = await context.newPage();
     await second.goto('/');
     await expect(second.getByTestId('question')).toBeVisible();
     await expect(second.getByTestId('progress-count')).toHaveText('1');
     await expect(second.getByTestId('nav-item').first()).toHaveAttribute('data-status', 'correct');
+    expect(await sessionOrder(second)).toEqual(await sessionOrder(page));
 
     // Answer the rest in the second tab; the first tab follows along.
     for (let i = 1; i < questions.length; i += 1) {
-      await second.getByTestId('nav-item').nth(i).click();
-      await second.locator(`[data-testid="option"][data-option-id="${questions[i].answer}"]`).click();
+      const item = second.getByTestId('nav-item').nth(i);
+      const q = byId.get(await item.getAttribute('data-question-id'));
+      await item.click();
+      await second.locator(`[data-testid="option"][data-option-id="${q.answer}"]`).click();
       await second.getByTestId('run-button').click();
       await expect(second.getByTestId('progress-count')).toHaveText(String(i + 1), { timeout: 10_000 });
     }
@@ -353,6 +384,79 @@ test.describe('anti-cheat', () => {
       expect(errors).toEqual([]);
     });
   }
+});
+
+test.describe('assessment mode', () => {
+  const optionKeysOf = (page) =>
+    page.getByTestId('option').evaluateAll((els) => els.map((el) => `${el.dataset.optionKey}=${el.dataset.optionId}`));
+
+  test('questions and options are shuffled per session and stay the same after a reload', async ({ page, browser }) => {
+    const preparationOrder = await page
+      .getByTestId('preview-question')
+      .evaluateAll((els) => els.map((el) => el.querySelector('.badge--mono').textContent));
+    await startQuiz(page, 15);
+    const order = await sessionOrder(page);
+    expect(order).toEqual(preparationOrder); // the preparation shows the same order as the quiz
+    const options = await optionKeysOf(page);
+    expect(options.map((o) => o.split('=')[0])).toEqual(['A', 'B', 'C', 'D']); // letters follow display position
+
+    page.on('dialog', (dialog) => dialog.accept());
+    await page.reload();
+    expect(await sessionOrder(page)).toEqual(order);
+    expect(await optionKeysOf(page)).toEqual(options);
+
+    // A different session (new browser profile) gets a different deal: 10! question orders × option orders.
+    const other = await browser.newContext();
+    const otherPage = await other.newPage();
+    await otherPage.goto('/');
+    const otherOrder = await sessionOrder(otherPage);
+    const otherOptions = await otherPage.getByTestId('preview-question').first().locator('.option__body').allTextContents();
+    await other.close();
+    expect([...otherOrder].sort()).toEqual([...order].sort());
+    const firstOptionsHere = await page.getByTestId('option').locator('.option__body').allTextContents();
+    expect(otherOrder.join() !== order.join() || otherOptions.join() !== firstOptionsHere.join()).toBe(true);
+  });
+
+  test('the result shows accuracy, time, an interviewer summary and a detailed answer review', async ({ page }) => {
+    await startQuiz(page, 10);
+    const order = await sessionOrder(page);
+    const first = byId.get(order[0]);
+    const second = byId.get(order[1]);
+    await answerCurrent(page, first.answer); // correct
+    await page.getByTestId('next-button').click();
+    await answerCurrent(page, wrongOption(second)); // incorrect
+    const wrongKey = await displayKey(page, wrongOption(second));
+    const rightKey = await displayKey(page, second.answer);
+    await page.clock.fastForward('10:00');
+
+    await expect(page.getByTestId('summary')).toBeVisible();
+    await expect(page.getByTestId('summary-points')).toHaveText(`${first.points} / 23`);
+    await expect(page.getByTestId('summary-accuracy')).toHaveText('50%');
+    await expect(page.getByTestId('summary-unanswered')).toHaveText('8');
+    await expect(page.getByTestId('completion-status')).toHaveText('Time expired');
+    await expect(page.getByTestId('summary-time')).toHaveText('10m 00s');
+
+    const summary = page.getByTestId('interviewer-summary');
+    await expect(summary).toBeVisible();
+    await expect(summary.getByTestId('overall-performance')).toHaveText('Needs Improvement');
+    await expect(summary.getByTestId('overall-headline')).toContainText('1 of 2 answered questions correct (50% accuracy)');
+    await expect(summary.getByTestId('difficulty-row')).toHaveCount(3);
+    await expect(summary.getByTestId('improvement').first()).toContainText(second.category);
+    await expect(summary.getByTestId('follow-up').first()).toContainText(second.category);
+
+    // Detailed review, in session order, with the letters the candidate saw.
+    const items = page.getByTestId('review-item');
+    await expect(items).toHaveCount(10);
+    const review = items.nth(1);
+    await expect(review).toHaveAttribute('data-question-id', second.id);
+    await expect(review).toHaveAttribute('data-status', 'incorrect');
+    await review.locator('summary').click();
+    await expect(review.getByTestId('review-candidate')).toContainText(wrongKey);
+    await expect(review.getByTestId('review-correct')).toContainText(rightKey);
+    await expect(review.locator('.explanation')).toBeVisible();
+    await expect(review.getByTestId('review-points')).toHaveText(`0 / ${second.points} pts`);
+    await expect(items.nth(2)).toHaveAttribute('data-status', 'unanswered');
+  });
 });
 
 test('layout has no horizontal overflow in any phase', async ({ page }) => {

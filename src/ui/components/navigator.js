@@ -23,7 +23,7 @@ export function renderNavigator({ questions, state }) {
           <button
             class="${cx('nav-item', `nav-item--${status}`, current && 'is-current', !action && 'is-static')}"
             ${action ? `data-action="${action}"` : 'disabled'} data-index="${index}"
-            data-testid="nav-item" data-status="${status}"
+            data-testid="nav-item" data-status="${status}" data-question-id="${escapeHtml(question.id)}"
             ${current ? 'aria-current="step"' : ''}
             aria-label="Question ${index + 1}: ${escapeHtml(question.title)} — ${STATUS_LABELS[status]}">
             <span class="nav-item__num">${STATUS_ICON[status]?.() ?? index + 1}</span>

@@ -7,16 +7,17 @@ import { renderInline } from '../markdown.js';
 import { renderCodeBlock } from './codeBlock.js';
 import { icons } from './icons.js';
 
-const DIFFICULTY_TONE = { Basic: 'easy', Intermediate: 'medium', Advanced: 'hard', Expert: 'expert' };
+const DIFFICULTY_TONE = { Easy: 'easy', Medium: 'medium', Hard: 'hard' };
 
 function renderPreviewQuestion(question, index, total) {
   const options = question.options
     .map((option) => {
       const lines = option.display.map((line) => `<span class="out-line">${escapeHtml(line)}</span>`).join('');
+      const key = option.key ?? option.id;
       return `
         <div class="option is-locked">
-          <span class="option__key" aria-hidden="true">${option.id}</span>
-          <span class="option__body"><span class="visually-hidden">Option ${option.id}: </span>${lines}</span>
+          <span class="option__key" aria-hidden="true">${key}</span>
+          <span class="option__body"><span class="visually-hidden">Option ${key}: </span>${lines}</span>
         </div>`;
     })
     .join('');

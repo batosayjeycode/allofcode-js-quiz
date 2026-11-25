@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { output, throws, values } from '../../src/questions/helpers.js';
-import { dedent, loadQuestionBank, normalizeQuestion } from '../../src/questions/schema.js';
+import { DEFAULT_DIFFICULTY, dedent, loadQuestionBank, normalizeQuestion } from '../../src/questions/schema.js';
 
 const base = {
   id: 'X-1',
@@ -24,6 +24,31 @@ describe('question schema', () => {
     expect(q.resultType).toBe('output');
   });
 
+  it('scores by difficulty: Easy 1, Medium 2, Hard 3 by default, Medium when missing', () => {
+    const noDifficulty = { ...base };
+    delete noDifficulty.difficulty;
+    expect(normalizeQuestion(noDifficulty)).toMatchObject({ difficulty: DEFAULT_DIFFICULTY, points: 2 });
+    expect(normalizeQuestion({ ...base, difficulty: 'Easy' })).toMatchObject({ difficulty: 'Easy', points: 1 });
+    expect(normalizeQuestion({ ...base, difficulty: 'Hard' })).toMatchObject({ difficulty: 'Hard', points: 3 });
+  });
+
+  it('maps legacy difficulty names for older question files', () => {
+    expect(['Basic', 'Intermediate', 'Advanced', 'Expert'].map((d) => normalizeQuestion({ ...base, difficulty: d }).difficulty)).toEqual([
+      'Easy',
+      'Medium',
+      'Hard',
+      'Hard',
+    ]);
+  });
+
+  it('takes points from config, with a per-question override', () => {
+    const difficultyPoints = { Easy: 5, Medium: 10, Hard: 20 };
+    expect(normalizeQuestion({ ...base, difficulty: 'Hard' }, { difficultyPoints }).points).toBe(20);
+    expect(normalizeQuestion({ ...base, difficulty: 'Hard', points: 7 }, { difficultyPoints }).points).toBe(7);
+    const bank = loadQuestionBank({ './a.js': { default: { ...base, difficulty: 'Medium' } } }, { difficultyPoints });
+    expect(bank[0].points).toBe(10);
+  });
+
   it('derives the result type from the answer', () => {
     expect(normalizeQuestion({ ...base, answer: 'B' }).resultType).toBe('error');
   });
@@ -31,7 +56,7 @@ describe('question schema', () => {
   it.each([
     [{ id: '' }, /"id"/],
     [{ title: '' }, /"title"/],
-    [{ difficulty: 'Easy' }, /"difficulty"/],
+    [{ difficulty: 'Impossible' }, /"difficulty"/],
     [{ options: [output('1')] }, /"options"/],
     [{ options: [output('1'), { kind: 'weird' }] }, /unknown kind/],
     [{ options: [output('1'), output('1')] }, /unique/],

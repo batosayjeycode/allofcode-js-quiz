@@ -1,4 +1,5 @@
 import { describeError } from '../../engine/executor.js';
+import { optionKey } from '../../state/order.js';
 import { cx, escapeHtml } from '../dom.js';
 import { renderMarkdown } from '../markdown.js';
 import { icons } from './icons.js';
@@ -49,7 +50,9 @@ export function renderConsole(answer) {
 export function renderVerdict({ question, answer }) {
   const evaluation = answer?.evaluation;
   if (!evaluation) return '';
-  const { isCorrect, selectedOptionId, correctOptionId } = evaluation;
+  const { isCorrect } = evaluation;
+  const selectedOptionId = optionKey(question, evaluation.selectedOptionId);
+  const correctOptionId = evaluation.correctOptionId && optionKey(question, evaluation.correctOptionId);
   const title = isCorrect ? 'Correct' : 'Incorrect';
   const detail = isCorrect
     ? `Option ${selectedOptionId} matches the actual execution result. +${evaluation.pointsEarned} ${evaluation.pointsEarned === 1 ? 'point' : 'points'}.`
@@ -58,7 +61,7 @@ export function renderVerdict({ question, answer }) {
       : `The actual execution result did not match any option.`;
   const warning = evaluation.consistentWithAnswerKey
     ? ''
-    : `<p class="verdict__warn">${icons.alert(13)} The execution result differs from this question's answer key (${escapeHtml(question.answer)}). Please report this question.</p>`;
+    : `<p class="verdict__warn">${icons.alert(13)} The execution result differs from this question's answer key (${escapeHtml(optionKey(question, question.answer))}). Please report this question.</p>`;
 
   return `
     <section class="${cx('verdict', isCorrect ? 'verdict--correct' : 'verdict--incorrect')}" data-testid="verdict" data-correct="${isCorrect}" role="status">

@@ -5,8 +5,7 @@ export default [
     id: 'JS-007',
     title: 'Microtasks vs Macrotasks',
     category: 'Event Loop',
-    difficulty: 'Intermediate',
-    points: 2,
+    difficulty: 'Medium',
     tags: ['event loop', 'microtasks', 'setTimeout'],
     description: 'Synchronous logs, a timer, a promise and a queued microtask. What is the output order?',
     code: `
@@ -37,8 +36,7 @@ export default [
     id: 'JS-008',
     title: 'async/await Resumption Order',
     category: 'Event Loop',
-    difficulty: 'Advanced',
-    points: 3,
+    difficulty: 'Hard',
     tags: ['event loop', 'async/await', 'microtasks'],
     description: 'Async functions, promise chains and a timer compete for the event loop. What is printed?',
     code: `
