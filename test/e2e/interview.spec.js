@@ -459,6 +459,68 @@ test.describe('assessment mode', () => {
   });
 });
 
+test.describe('export PDF', () => {
+  /** Finishes a short quiz (one correct answer, then time runs out) with window.print stubbed. */
+  async function finishWithPrintStub(page) {
+    await page.addInitScript(() => {
+      window.__prints = [];
+      window.print = () =>
+        window.__prints.push({
+          title: document.title,
+          closedDetails: document.querySelectorAll('details:not([open])').length,
+          reviewItems: document.querySelectorAll('[data-testid="review-item"]').length,
+        });
+    });
+    await page.reload();
+    await startQuiz(page, 5);
+    await expect(page.getByTestId('export-pdf')).toHaveCount(0); // only on the result page
+    await answerCurrent(page, (await currentQuestion(page)).answer);
+    await page.clock.fastForward('05:00');
+    await expect(page.getByTestId('summary')).toBeVisible();
+  }
+
+  test('Export PDF opens the print dialog with every review expanded and a descriptive file name', async ({ page }) => {
+    await finishWithPrintStub(page);
+    const appTitle = await page.title();
+    const points = await page.getByTestId('summary-points').textContent();
+
+    await page.getByTestId('export-pdf').click();
+    const prints = await page.evaluate(() => window.__prints);
+    expect(prints).toHaveLength(1);
+    expect(prints[0].reviewItems).toBe(10);
+    expect(prints[0].closedDetails).toBe(0);
+    const [earned, total] = points.split('/').map((n) => n.trim());
+    expect(prints[0].title).toMatch(new RegExp(`^js-quiz-result-\\d{4}-\\d{2}-\\d{2}-\\d{4}-${earned}of${total}$`));
+
+    // Closing the dialog restores the page as it was.
+    await page.evaluate(() => window.dispatchEvent(new Event('afterprint')));
+    await expect(page).toHaveTitle(appTitle);
+    await expect(page.locator('[data-testid="review-item"][open]')).toHaveCount(0);
+  });
+
+  test('the print layout is a clean report, also via Ctrl/Cmd+P, and renders to a PDF file', async ({ page }) => {
+    await finishWithPrintStub(page);
+    await page.evaluate(() => window.dispatchEvent(new Event('beforeprint'))); // what Ctrl/Cmd+P fires
+    await expect(page.locator('[data-testid="review-item"][open]')).toHaveCount(10);
+
+    await page.emulateMedia({ media: 'print' });
+    await expect(page.getByTestId('print-report')).toBeVisible();
+    await expect(page.getByTestId('print-report')).toContainText('Assessment report');
+    for (const hidden of ['.topbar', '.sidebar', '.summary__actions']) {
+      await expect(page.locator(hidden)).toBeHidden();
+    }
+    await expect(page.getByTestId('interviewer-summary')).toBeVisible();
+    await expect(page.getByTestId('review-correct').first()).toBeVisible();
+
+    const pdf = await page.pdf({ format: 'A4', printBackground: true, preferCSSPageSize: true });
+    expect(pdf.subarray(0, 5).toString()).toBe('%PDF-');
+    expect(pdf.length).toBeGreaterThan(50_000);
+
+    await page.emulateMedia({ media: 'screen' });
+    await expect(page.getByTestId('print-report')).toBeHidden();
+  });
+});
+
 test('layout has no horizontal overflow in any phase', async ({ page }) => {
   const overflow = () => page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
   expect(await overflow()).toBeLessThanOrEqual(0);

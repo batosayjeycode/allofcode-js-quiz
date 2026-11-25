@@ -14,6 +14,23 @@ const DIFFICULTY_TONE = { Easy: 'easy', Medium: 'medium', Hard: 'hard' };
 
 const plural = (count, word) => `${count} ${word}${count === 1 ? '' : 's'}`;
 
+const formatDateTime = (timestamp) =>
+  timestamp ? new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(timestamp) : '—';
+
+/** Header that only appears in the printed / exported PDF report. */
+function renderPrintHeader(state) {
+  return `
+    <header class="print-report" data-testid="print-report">
+      <p class="print-report__brand">JS Quiz · Assessment report</p>
+      <dl class="print-report__meta">
+        <div><dt>Started</dt><dd>${escapeHtml(formatDateTime(state.quizStartedAt))}</dd></div>
+        <div><dt>Ended</dt><dd>${escapeHtml(formatDateTime(state.endedAt))}</dd></div>
+        <div><dt>Time limit</dt><dd>${state.durationMinutes ? `${state.durationMinutes} minutes` : '—'}</dd></div>
+        <div><dt>Session</dt><dd class="mono">${escapeHtml(String(state.sessionId ?? '').slice(0, 8))}</dd></div>
+      </dl>
+    </header>`;
+}
+
 function renderTabSwitches(state) {
   const count = state.tabSwitches ?? 0;
   const text = count
@@ -170,6 +187,7 @@ export function renderSummaryView({ questions, state, summary, confirmRestart })
 
   return `
     <article class="summary" data-testid="summary">
+      ${renderPrintHeader(state)}
       <header class="summary__hero">
         <div>
           <p class="eyebrow">Assessment result</p>
@@ -206,6 +224,7 @@ export function renderSummaryView({ questions, state, summary, confirmRestart })
       </section>
 
       <div class="summary__actions">
+        <button class="btn btn--primary" data-action="export-pdf" data-testid="export-pdf" title="Save this result as a PDF (choose “Save as PDF” in the print dialog)">${icons.download()} Export PDF</button>
         <button class="${cx('btn', confirmRestart ? 'btn--danger' : 'btn--secondary')}" data-action="restart">${icons.restart()} ${confirmRestart ? 'Confirm: discard answers' : 'Start a new interview'}</button>
       </div>
     </article>`;
