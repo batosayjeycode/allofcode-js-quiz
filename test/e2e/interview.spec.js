@@ -548,3 +548,27 @@ test('layout has no horizontal overflow in any phase', async ({ page }) => {
   await expect(page.getByTestId('summary')).toBeVisible();
   expect(await overflow()).toBeLessThanOrEqual(0);
 });
+
+test('on a phone, answering keeps the scroll position and the current question stays visible in the strip', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 664 });
+  await startQuiz(page);
+  const options = page.locator('label:has(input[name="answer"])');
+
+  await options.last().scrollIntoViewIfNeeded();
+  const scrolled = await page.evaluate(() => window.scrollY);
+  expect(scrolled).toBeGreaterThan(0);
+  await options.first().click();
+  await expect(page.locator('input[name="answer"]').first()).toBeChecked();
+  expect(await page.evaluate(() => window.scrollY)).toBe(scrolled);
+
+  // Moving to the last question scrolls the navigator strip, not the page.
+  await page.locator('[data-testid="nav-item"]').last().click();
+  const chipVisible = await page.evaluate(() => {
+    const strip = document.querySelector('[data-region="nav"]').getBoundingClientRect();
+    const chip = document.querySelector('.is-current').getBoundingClientRect();
+    return chip.left >= strip.left && chip.right <= strip.right;
+  });
+  expect(chipVisible).toBe(true);
+});

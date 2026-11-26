@@ -86,6 +86,22 @@ export function mountApp(root, { questions, store, execute }) {
     else ticker.stop();
   }
 
+  /**
+   * Keeps the current question visible inside the navigator by scrolling only the
+   * navigator itself. On narrow screens it is a static strip above the question,
+   * where scrollIntoView would also scroll the page and make it jump on every answer.
+   */
+  function revealInNav(item) {
+    if (!item) return;
+    const nav = regions.nav;
+    const box = nav.getBoundingClientRect();
+    const rect = item.getBoundingClientRect();
+    if (rect.left < box.left) nav.scrollLeft -= box.left - rect.left;
+    else if (rect.right > box.right) nav.scrollLeft += rect.right - box.right;
+    if (rect.top < box.top) nav.scrollTop -= box.top - rect.top;
+    else if (rect.bottom > box.bottom) nav.scrollTop += rect.bottom - box.bottom;
+  }
+
   function render({ scrollTop = false } = {}) {
     const state = store.getState();
     const questions = sessionQuestions();
@@ -109,7 +125,7 @@ export function mountApp(root, { questions, store, execute }) {
         total: questions.length,
         answer: state.answers[question.id],
       });
-      if (focusedOption) regions.main.querySelector('input[name="answer"]:checked')?.focus();
+      if (focusedOption) regions.main.querySelector('input[name="answer"]:checked')?.focus({ preventScroll: true });
     }
 
     root.dataset.phase = state.phase;
@@ -118,7 +134,7 @@ export function mountApp(root, { questions, store, execute }) {
     syncHistoryGuard(state.phase);
 
     if (state.phase === 'quiz') {
-      regions.nav.querySelector('.is-current')?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
+      revealInNav(regions.nav.querySelector('.is-current'));
     }
     if (scrollTop) {
       regions.main.scrollTop = 0;
