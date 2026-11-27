@@ -41,12 +41,89 @@ async function startQuiz(page, minutes = 15) {
   await expect(page.getByTestId('question')).toBeVisible();
 }
 
+/** Leaves the landing page through its call to action and waits for the preparation phase. */
+async function startChallenge(page) {
+  await expect(page.getByTestId('landing')).toBeVisible();
+  await page.getByTestId('start-challenge').click();
+  await expect(page.getByTestId('preparation')).toBeVisible();
+}
+
 // Each test gets a fresh browser context, so sessionStorage starts empty.
 // The fake clock keeps flowing in real time; fastForward jumps it like a long background-tab pause.
 test.beforeEach(async ({ page }) => {
   await page.clock.install();
   await page.goto('/');
-  await expect(page.getByTestId('preparation')).toBeVisible();
+  await startChallenge(page);
+});
+
+test.describe('landing page', () => {
+  // The shared beforeEach has already started a session in `page`; tests that need a
+  // brand-new session open their own browser context.
+
+  test('is the untimed entry point of a new session, and survives a reload', async ({ browser }) => {
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    await page.clock.install();
+    await page.goto('/');
+    await expect(page.getByTestId('landing')).toBeVisible();
+    await expect(page.getByRole('heading', { level: 1 })).toContainText('Predict the output');
+    await expect(page.getByTestId('timer')).toHaveCount(0);
+    await expect(page.getByTestId('nav-item')).toHaveCount(0); // no question content before the timed preparation
+    await expect(page.getByTestId('landing-score')).toHaveText([/Easy[\s\S]*1\s*point/, /Medium[\s\S]*2\s*points/, /Hard[\s\S]*3\s*points/]);
+    await expect(page.getByTestId('start-challenge')).toHaveCount(1);
+
+    // Time on the landing page doesn't count, and a reload stays on it.
+    await page.clock.fastForward('10:00');
+    await page.reload();
+    await expect(page.getByTestId('landing')).toBeVisible();
+
+    await startChallenge(page);
+    await expect(page.getByTestId('timer')).toHaveAttribute('data-phase', 'preparation');
+    await expect(page.getByTestId('timer')).toContainText(/0[45]:\d\d/);
+    await expect(page.getByTestId('preview-question')).toHaveCount(questions.length);
+    await context.close();
+  });
+
+  test('reloading or reopening never brings back the landing page for an active or finished session', async ({ page, context }) => {
+    // beforeEach already started this session.
+    await page.reload();
+    await expect(page.getByTestId('preparation')).toBeVisible();
+    await expect(page.getByTestId('landing')).toHaveCount(0);
+
+    const second = await context.newPage();
+    await second.goto('/');
+    await expect(second.getByTestId('preparation')).toBeVisible();
+    await second.close();
+
+    await startQuiz(page, 5);
+    page.on('dialog', (dialog) => dialog.accept());
+    await page.clock.fastForward('05:00');
+    await expect(page.getByTestId('summary')).toBeVisible();
+    await page.reload();
+    await expect(page.getByTestId('summary')).toBeVisible();
+    await expect(page.getByTestId('landing')).toHaveCount(0);
+  });
+
+  test('fits a phone screen without horizontal scrolling', async ({ browser }) => {
+    const context = await browser.newContext({ viewport: { width: 375, height: 740 } });
+    const page = await context.newPage();
+    await page.goto('/');
+    await expect(page.getByTestId('landing')).toBeVisible();
+    const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+    expect(overflow).toBeLessThanOrEqual(0);
+    await expect(page.getByTestId('start-challenge')).toBeInViewport();
+    await startChallenge(page);
+    await context.close();
+  });
+
+  test('starts immediately, without the exit animation, when reduced motion is preferred', async ({ browser }) => {
+    const context = await browser.newContext({ reducedMotion: 'reduce' });
+    const page = await context.newPage();
+    await page.goto('/');
+    await page.getByTestId('start-challenge').click();
+    await expect(page.getByTestId('preparation')).toBeVisible({ timeout: 300 });
+    await context.close();
+  });
 });
 
 test.describe('preparation and duration selection', () => {
@@ -242,10 +319,12 @@ test('navigation, persistence, and the timer ending the quiz with a mixed score'
   await expect(page.getByTestId('summary')).toBeVisible();
   await expect(page.getByTestId('summary-points')).toHaveText(`${expectedPoints} / ${totalPoints}`);
 
-  // Restart (two-step confirm) begins a new preparation.
+  // Restart (two-step confirm) opens a new session on the landing page.
   await page.getByTestId('restart').click();
   await page.getByTestId('confirm-restart').click();
-  await expect(page.getByTestId('preparation')).toBeVisible();
+  await expect(page.getByTestId('landing')).toBeVisible();
+  await expect(page.getByTestId('timer')).toHaveCount(0);
+  await startChallenge(page);
   await expect(page.getByTestId('progress-count')).toHaveText('0');
 });
 
@@ -379,7 +458,7 @@ test.describe('anti-cheat', () => {
       // Written before the app's scripts run, as if edited while no quiz tab was open.
       await page.addInitScript(([key, raw]) => localStorage.setItem(key, raw), [STORAGE_KEY, value]);
       await page.reload();
-      await expect(page.getByTestId('preparation')).toBeVisible();
+      await startChallenge(page);
       await expect(page.getByTestId('timer')).toHaveAttribute('data-phase', 'preparation');
       expect(errors).toEqual([]);
     });
@@ -409,6 +488,7 @@ test.describe('assessment mode', () => {
     const other = await browser.newContext();
     const otherPage = await other.newPage();
     await otherPage.goto('/');
+    await startChallenge(otherPage);
     const otherOrder = await sessionOrder(otherPage);
     const otherOptions = await otherPage.getByTestId('preview-question').first().locator('.option__body').allTextContents();
     await other.close();

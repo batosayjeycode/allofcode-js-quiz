@@ -13,13 +13,9 @@ export function renderTimer(phase) {
     </div>`;
 }
 
-export function renderHeader({ summary, phase, confirmRestart }) {
+function renderProgress(summary) {
   const progress = summary.totalQuestions ? (summary.completed / summary.totalQuestions) * 100 : 0;
   return `
-    <div class="topbar__brand">
-      <span class="brand-mark" aria-hidden="true">{&nbsp;}</span>
-      <span class="brand-name">JS Quiz</span>
-    </div>
     <div class="topbar__progress" aria-label="Progress">
       <div class="progress-text">
         <span><strong data-testid="progress-count">${summary.completed}</strong> / ${summary.totalQuestions} completed</span>
@@ -28,7 +24,16 @@ export function renderHeader({ summary, phase, confirmRestart }) {
       <div class="progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="${summary.totalQuestions}" aria-valuenow="${summary.completed}">
         <div class="progress-fill" style="width:${progress.toFixed(1)}%"></div>
       </div>
+    </div>`;
+}
+
+export function renderHeader({ summary, phase, confirmRestart }) {
+  return `
+    <div class="topbar__brand">
+      <span class="brand-mark" aria-hidden="true">{&nbsp;}</span>
+      <span class="brand-name">JS Quiz</span>
     </div>
+    ${phase === 'intro' ? '<div class="topbar__progress" aria-hidden="true"></div>' : renderProgress(summary)}
     <div class="topbar__actions">
       ${renderTimer(phase)}
       ${

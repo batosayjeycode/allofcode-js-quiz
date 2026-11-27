@@ -46,9 +46,16 @@ function fakeClock(start = 1_000_000) {
 
 const MINUTE = 60_000;
 
+/** Opens the quiz like a candidate would: a new session starts on the landing page until `start`. */
+function openStore(qs, options) {
+  const store = createSessionStore(qs, options);
+  store.dispatch({ type: 'start' });
+  return store;
+}
+
 /** A store whose preparation has elapsed and whose quiz is running with `minutes` on the clock. */
 function quizStore({ minutes = 15, storage, clock = fakeClock() } = {}) {
-  const store = createSessionStore(questions, { storage, now: clock });
+  const store = openStore(questions, { storage, now: clock });
   clock.advance(PREPARATION_MS);
   store.dispatch({ type: 'selectDuration', minutes });
   return Object.assign(store, { clock });
@@ -104,7 +111,7 @@ describe('session reducer', () => {
     expect(store.getState()).toMatchObject({ currentIndex: 2, phase: 'quiz' });
   });
 
-  it('only restarts a finished quiz, into a fresh preparation', () => {
+  it('only restarts a finished quiz, into a fresh landing page', () => {
     const store = quizStore({ minutes: 5 });
     answer(store, 'Q1', 'A');
     store.dispatch({ type: 'restart' });
@@ -114,11 +121,15 @@ describe('session reducer', () => {
     store.dispatch({ type: 'tick' });
     store.dispatch({ type: 'restart' });
     expect(store.getState()).toMatchObject({
-      phase: 'preparation',
+      phase: 'intro',
       answers: {},
       durationMinutes: null,
-      preparationEndsAt: store.clock() + PREPARATION_MS,
+      startedAt: null,
+      preparationEndsAt: null,
     });
+    store.clock.advance(MINUTE);
+    store.dispatch({ type: 'start' });
+    expect(store.getState()).toMatchObject({ phase: 'preparation', preparationEndsAt: store.clock() + PREPARATION_MS });
   });
 
   it('persists and restores the session, keeping interrupted runs locked', () => {
@@ -129,7 +140,7 @@ describe('session reducer', () => {
     store.dispatch({ type: 'runStarted', questionId: 'Q2' });
     store.dispatch({ type: 'goTo', index: 1 });
 
-    const restored = createSessionStore(questions, { storage, now: store.clock }).getState();
+    const restored = openStore(questions, { storage, now: store.clock }).getState();
     expect(restored).toMatchObject({ phase: 'quiz', durationMinutes: 15, quizEndsAt: store.getState().quizEndsAt });
     expect(restored.currentIndex).toBe(1);
     expect(restored.answers.Q1.status).toBe('done');
@@ -147,9 +158,73 @@ describe('session reducer', () => {
 });
 
 describe('phase flow', () => {
+  it('opens a new session on the untimed landing page, which only `start` leaves', () => {
+    const storage = memoryStorage();
+    const clock = fakeClock();
+    const store = createSessionStore(questions, { storage, now: clock });
+    const landing = store.getState();
+    expect(landing).toMatchObject({ phase: 'intro', startedAt: null, preparationEndsAt: null, answers: {} });
+
+    for (const action of [
+      { type: 'tick' },
+      { type: 'selectDuration', minutes: 5 },
+      { type: 'selectOption', questionId: 'Q1', optionId: 'A' },
+      { type: 'goTo', index: 1 },
+      { type: 'restart' },
+      { type: 'visibilityChange', hidden: true },
+    ]) {
+      store.dispatch(action);
+    }
+    expect(store.getState()).toBe(landing);
+
+    // No deadline runs on the landing page, and a reload stays there.
+    clock.advance(60 * MINUTE);
+    store.dispatch({ type: 'tick' });
+    expect(store.getState().phase).toBe('intro');
+    expect(createSessionStore(questions, { storage, now: clock }).getState()).toMatchObject({ phase: 'intro', sessionId: landing.sessionId });
+
+    store.dispatch({ type: 'start' });
+    expect(store.getState()).toMatchObject({
+      phase: 'preparation',
+      sessionId: landing.sessionId,
+      questionOrder: landing.questionOrder,
+      startedAt: clock(),
+      preparationEndsAt: clock() + PREPARATION_MS,
+    });
+    // A second start (double click, another tab) never resets the preparation deadline.
+    const { preparationEndsAt } = store.getState();
+    clock.advance(MINUTE);
+    store.dispatch({ type: 'start' });
+    expect(store.getState().preparationEndsAt).toBe(preparationEndsAt);
+    expect(createSessionStore(questions, { storage, now: clock }).getState()).toMatchObject({ phase: 'preparation', preparationEndsAt });
+  });
+
+  it('never lets `start` reset an active or finished session, from any tab', () => {
+    const storage = memoryStorage();
+    const quiz = quizStore({ minutes: 5, storage });
+    const otherTab = createSessionStore(questions, { storage, now: quiz.clock });
+    otherTab.dispatch({ type: 'start' });
+    expect(otherTab.getState()).toMatchObject({ phase: 'quiz', sessionId: quiz.getState().sessionId });
+
+    quiz.clock.advance(5 * MINUTE);
+    quiz.dispatch({ type: 'tick' });
+    const finished = quiz.getState();
+    otherTab.dispatch({ type: 'start' });
+    expect(otherTab.getState()).toMatchObject({ phase: 'result', sessionId: finished.sessionId, endedAt: finished.endedAt });
+  });
+
+  it('rejects an inconsistent landing-page session', () => {
+    const clock = fakeClock();
+    const landing = createSessionStore(questions, { now: clock }).getState();
+    expect(validateState(landing, questions)).toBe(true);
+    expect(validateState({ ...landing, startedAt: clock() }, questions)).toBe(false);
+    expect(validateState({ ...landing, preparationEndsAt: clock() + PREPARATION_MS }, questions)).toBe(false);
+    expect(validateState({ ...landing, durationMinutes: 5 }, questions)).toBe(false);
+  });
+
   it('starts in a 5-minute preparation that ignores every quiz action', () => {
     const clock = fakeClock();
-    const store = createSessionStore(questions, { now: clock });
+    const store = openStore(questions, { now: clock });
     expect(store.getState()).toMatchObject({ phase: 'preparation', preparationEndsAt: clock() + 5 * MINUTE });
 
     const before = store.getState();
@@ -175,7 +250,7 @@ describe('phase flow', () => {
 
   it('applies a passed deadline before the action, even without a tick', () => {
     const clock = fakeClock();
-    const store = createSessionStore(questions, { now: clock });
+    const store = openStore(questions, { now: clock });
     clock.advance(PREPARATION_MS + 30 * MINUTE); // e.g. a long-throttled background tab
     store.dispatch({ type: 'selectDuration', minutes: 10 });
     expect(store.getState()).toMatchObject({ phase: 'quiz', durationMinutes: 10, quizEndsAt: clock() + 10 * MINUTE });
@@ -184,7 +259,7 @@ describe('phase flow', () => {
   it('accepts only 5, 10 or 15 minutes, chosen once', () => {
     expect(QUIZ_DURATIONS).toEqual([5, 10, 15]);
     const clock = fakeClock();
-    const store = createSessionStore(questions, { now: clock });
+    const store = openStore(questions, { now: clock });
     clock.advance(PREPARATION_MS);
     for (const minutes of [0, 1, 7, 20, '5', -5, Number.NaN]) {
       store.dispatch({ type: 'selectDuration', minutes });
@@ -264,14 +339,14 @@ describe('phase flow', () => {
   it('keeps deadlines across a reload and catches up on time that passed while closed', () => {
     const storage = memoryStorage();
     const clock = fakeClock();
-    createSessionStore(questions, { storage, now: clock });
+    openStore(questions, { storage, now: clock });
     clock.advance(2 * MINUTE);
-    const reloaded = createSessionStore(questions, { storage, now: clock });
+    const reloaded = openStore(questions, { storage, now: clock });
     expect(reloaded.getState()).toMatchObject({ phase: 'preparation', preparationEndsAt: clock() + 3 * MINUTE });
 
     const quiz = quizStore({ minutes: 10, storage, clock: fakeClock(5_000_000) });
     quiz.clock.advance(11 * MINUTE);
-    expect(createSessionStore(questions, { storage, now: quiz.clock }).getState()).toMatchObject({
+    expect(openStore(questions, { storage, now: quiz.clock }).getState()).toMatchObject({
       phase: 'result',
       endReason: 'timeout',
     });
@@ -364,19 +439,19 @@ describe('anti-cheat: persistence and tabs', () => {
   it('reloading never resets the preparation or quiz deadline', () => {
     const storage = memoryStorage();
     const clock = fakeClock();
-    const first = createSessionStore(questions, { storage, now: clock });
+    const first = openStore(questions, { storage, now: clock });
     const { sessionId, preparationEndsAt } = first.getState();
     for (let i = 0; i < 3; i += 1) {
       clock.advance(MINUTE);
-      expect(createSessionStore(questions, { storage, now: clock }).getState()).toMatchObject({ sessionId, preparationEndsAt });
+      expect(openStore(questions, { storage, now: clock }).getState()).toMatchObject({ sessionId, preparationEndsAt });
     }
 
     clock.advance(2 * MINUTE);
-    const store = createSessionStore(questions, { storage, now: clock });
+    const store = openStore(questions, { storage, now: clock });
     store.dispatch({ type: 'selectDuration', minutes: 5 });
     const { quizEndsAt } = store.getState();
     clock.advance(MINUTE);
-    const reloaded = createSessionStore(questions, { storage, now: clock });
+    const reloaded = openStore(questions, { storage, now: clock });
     expect(reloaded.getState()).toMatchObject({ phase: 'quiz', sessionId, quizEndsAt });
     // An active quiz can't be restarted, from any tab.
     reloaded.dispatch({ type: 'restart' });
@@ -394,7 +469,7 @@ describe('anti-cheat: persistence and tabs', () => {
     clock.advance(-60 * MINUTE); // user moves the system clock back an hour
     expect(store.now()).toBe(before);
     // Also after a reload, which reads the persisted high-water mark.
-    const reloaded = createSessionStore(questions, { storage, now: clock });
+    const reloaded = openStore(questions, { storage, now: clock });
     expect(reloaded.now()).toBeGreaterThanOrEqual(before - 1000);
     clock.advance(61 * MINUTE + 1000);
     reloaded.dispatch({ type: 'tick' });
@@ -404,8 +479,8 @@ describe('anti-cheat: persistence and tabs', () => {
   it('shares one session between tabs, and a stale tab cannot overwrite a finished quiz', () => {
     const storage = memoryStorage();
     const clock = fakeClock();
-    const tabA = createSessionStore(questions, { storage, now: clock });
-    const tabB = createSessionStore(questions, { storage, now: clock });
+    const tabA = openStore(questions, { storage, now: clock });
+    const tabB = openStore(questions, { storage, now: clock });
     expect(tabB.getState().sessionId).toBe(tabA.getState().sessionId);
 
     clock.advance(PREPARATION_MS);
@@ -436,7 +511,7 @@ describe('anti-cheat: persistence and tabs', () => {
   it('runs a duplicate completion only once across tabs', () => {
     const storage = memoryStorage();
     const tabA = quizStore({ storage });
-    const tabB = createSessionStore(questions, { storage, now: tabA.clock });
+    const tabB = openStore(questions, { storage, now: tabA.clock });
     tabA.dispatch({ type: 'selectOption', questionId: 'Q1', optionId: 'A' });
     tabA.dispatch({ type: 'runStarted', questionId: 'Q1' });
     tabB.dispatch({ type: 'runStarted', questionId: 'Q1' }); // already locked
@@ -492,7 +567,7 @@ describe('anti-cheat: persistence and tabs', () => {
       const storage = memoryStorage();
       storage.setItem(KEY, typeof value === 'string' ? value : JSON.stringify(value));
       const state = createSessionStore(questions, { storage, now: clock }).getState();
-      expect(state.phase, name).toBe('preparation');
+      expect(state.phase, name).toBe('intro');
       expect(state.sessionId, name).not.toBe(valid.sessionId);
     }
 
@@ -501,9 +576,9 @@ describe('anti-cheat: persistence and tabs', () => {
     const old = quizStore({ minutes: 5, storage, clock: fakeClock(100 * STALE_SESSION_MS) });
     old.clock.advance(5 * MINUTE);
     old.dispatch({ type: 'tick' });
-    expect(createSessionStore(questions, { storage, now: old.clock }).getState().phase).toBe('result');
+    expect(openStore(questions, { storage, now: old.clock }).getState().phase).toBe('result');
     old.clock.advance(STALE_SESSION_MS + 1);
-    expect(createSessionStore(questions, { storage, now: old.clock }).getState().phase).toBe('preparation');
+    expect(createSessionStore(questions, { storage, now: old.clock }).getState().phase).toBe('intro');
   });
 
   it('recomputes scores from the stored results instead of trusting them', () => {
@@ -523,7 +598,7 @@ describe('anti-cheat: persistence and tabs', () => {
 describe('anti-cheat: tab visibility', () => {
   it('counts tab switches and time away during the quiz only, without pausing the timer', () => {
     const clock = fakeClock();
-    const store = createSessionStore(questions, { now: clock });
+    const store = openStore(questions, { now: clock });
     store.dispatch({ type: 'visibilityChange', hidden: true }); // preparation: not counted
     clock.advance(PREPARATION_MS);
     store.dispatch({ type: 'selectDuration', minutes: 5 });
@@ -568,14 +643,14 @@ describe('randomized order in the session', () => {
   it('deals an order once and keeps it across reloads and tabs', () => {
     const storage = memoryStorage();
     const clock = fakeClock();
-    const first = createSessionStore(many, { storage, now: clock, random: seeded(7) });
+    const first = openStore(many, { storage, now: clock, random: seeded(7) });
     const { questionOrder, optionOrder } = first.getState();
     expect(questionOrder).not.toEqual(many.map((q) => q.id));
 
     // A reload or another tab uses a different random source, but must keep the saved order.
     for (const seed of [1, 2, 3]) {
       clock.advance(MINUTE);
-      const state = createSessionStore(many, { storage, now: clock, random: seeded(seed) }).getState();
+      const state = openStore(many, { storage, now: clock, random: seeded(seed) }).getState();
       expect(state.questionOrder).toEqual(questionOrder);
       expect(state.optionOrder).toEqual(optionOrder);
     }
@@ -583,23 +658,23 @@ describe('randomized order in the session', () => {
 
   it('deals a new order only when a finished quiz is restarted', () => {
     const clock = fakeClock();
-    const store = createSessionStore(many, { now: clock, random: seeded(11) });
+    const store = openStore(many, { now: clock, random: seeded(11) });
     const { questionOrder } = store.getState();
     clock.advance(PREPARATION_MS);
     store.dispatch({ type: 'selectDuration', minutes: 5 });
     expect(store.getState().questionOrder).toEqual(questionOrder);
     clock.advance(5 * MINUTE);
     store.dispatch({ type: 'restart' });
-    expect(store.getState().phase).toBe('preparation');
+    expect(store.getState().phase).toBe('intro');
     expect(store.getState().questionOrder).not.toEqual(questionOrder);
   });
 
   it('rejects a saved session whose order was tampered with', () => {
     const storage = memoryStorage();
     const clock = fakeClock();
-    const saved = createSessionStore(many, { storage, now: clock }).getState();
+    const saved = openStore(many, { storage, now: clock }).getState();
     storage.setItem(KEY, JSON.stringify({ ...saved, questionOrder: saved.questionOrder.slice(1) }));
-    expect(createSessionStore(many, { storage, now: clock }).getState().sessionId).not.toBe(saved.sessionId);
+    expect(openStore(many, { storage, now: clock }).getState().sessionId).not.toBe(saved.sessionId);
   });
 
   it('carries over a session saved before randomization, in the authored order', () => {
@@ -611,7 +686,7 @@ describe('randomized order in the session', () => {
     delete v3.optionOrder;
     storage.setItem(KEY, JSON.stringify(v3));
 
-    const restored = createSessionStore(questions, { storage, now: store.clock }).getState();
+    const restored = openStore(questions, { storage, now: store.clock }).getState();
     expect(restored).toMatchObject({ version: 4, phase: 'quiz', sessionId: v3.sessionId, quizEndsAt: v3.quizEndsAt });
     expect(restored.questionOrder).toEqual(['Q1', 'Q2', 'Q3']);
     expect(restored.optionOrder.Q1).toEqual(['A', 'B', 'C']);

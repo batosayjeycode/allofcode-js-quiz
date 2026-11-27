@@ -7,9 +7,10 @@
  */
 import { computeSummary } from '../state/scoring.js';
 import { createOrderedQuestions } from '../state/order.js';
-import { QUIZ_DURATIONS, RUN_STALE_MS } from '../state/session.js';
+import { PREPARATION_MS, QUIZ_DURATIONS, RUN_STALE_MS } from '../state/session.js';
 import { createTicker, formatCountdown, remainingMs } from '../state/timer.js';
 import { renderHeader } from './components/header.js';
+import { renderLandingView } from './components/landingView.js';
 import { renderNavigator } from './components/navigator.js';
 import { renderDurationView, renderPreparationView } from './components/phaseViews.js';
 import { renderQuestionView } from './components/questionView.js';
@@ -19,6 +20,10 @@ const RESTART_CONFIRM_MS = 4000;
 const LOW_TIME_MS = 60_000;
 const TIMED_PHASES = new Set(['preparation', 'quiz']);
 const HISTORY_GUARD = 'jsQuizGuard';
+/** Length of the landing page's exit animation before the preparation phase opens. */
+const START_TRANSITION_MS = 450;
+
+const prefersReducedMotion = () => window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
 
 /**
  * @param {HTMLElement} root
@@ -44,7 +49,7 @@ export function mountApp(root, { questions, store, execute }) {
     main: root.querySelector('[data-region="main"]'),
   };
 
-  const ui = { confirmRestart: false, confirmTimer: null };
+  const ui = { confirmRestart: false, confirmTimer: null, starting: false, startTimer: null, revealObserver: null };
   const ownRuns = new Set(); // question ids this tab is executing right now
 
   // The session's randomized order (stable for the whole session, across reloads and tabs).
@@ -109,9 +114,20 @@ export function mountApp(root, { questions, store, execute }) {
     const focusedOption = document.activeElement?.matches?.('input[name="answer"]');
 
     regions.header.innerHTML = renderHeader({ summary, phase: state.phase, confirmRestart: ui.confirmRestart });
-    regions.nav.innerHTML = renderNavigator({ questions, state });
+    // The landing page lists no question content: reading starts with the timed preparation.
+    regions.nav.innerHTML = state.phase === 'intro' ? '' : renderNavigator({ questions, state });
+    ui.revealObserver?.disconnect();
+    ui.revealObserver = null;
 
-    if (state.phase === 'preparation') {
+    if (state.phase === 'intro') {
+      regions.main.innerHTML = renderLandingView({
+        questions,
+        durations: QUIZ_DURATIONS,
+        preparationMinutes: PREPARATION_MS / 60_000,
+        starting: ui.starting,
+      });
+      observeReveals();
+    } else if (state.phase === 'preparation') {
       regions.main.innerHTML = renderPreparationView({ questions });
     } else if (state.phase === 'durationSelection') {
       regions.main.innerHTML = renderDurationView({ durations: QUIZ_DURATIONS });
@@ -201,6 +217,48 @@ export function mountApp(root, { questions, store, execute }) {
     }
   }
 
+  /** Fades landing sections in as they scroll into view (progressive enhancement: visible without it). */
+  function observeReveals() {
+    const targets = regions.main.querySelectorAll('[data-reveal]');
+    if (!targets.length || prefersReducedMotion() || typeof IntersectionObserver !== 'function') return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (!entry.isIntersecting) continue;
+          entry.target.classList.add('is-revealed');
+          observer.unobserve(entry.target);
+        }
+      },
+      { rootMargin: '0px 0px -8% 0px', threshold: 0.08 },
+    );
+    for (const el of targets) {
+      el.classList.add('reveal');
+      observer.observe(el);
+    }
+    ui.revealObserver = observer;
+  }
+
+  /**
+   * Landing CTA: plays a short exit animation, then starts the session. The reducer
+   * only accepts `start` from the intro phase, so this can never reset or skip an
+   * active or finished session (e.g. one another tab already started).
+   */
+  function startChallenge() {
+    if (store.getState().phase !== 'intro' || ui.starting) return;
+    if (prefersReducedMotion()) {
+      store.dispatch({ type: 'start' });
+      return;
+    }
+    ui.starting = true;
+    render();
+    ui.startTimer = setTimeout(() => {
+      ui.startTimer = null;
+      ui.starting = false;
+      store.dispatch({ type: 'start' });
+      if (store.getState().phase === 'intro') render(); // start was refused: show the landing again
+    }, START_TRANSITION_MS);
+  }
+
   function requestRestart() {
     if (store.getState().phase !== 'result') return;
     if (!ui.confirmRestart) {
@@ -230,6 +288,7 @@ export function mountApp(root, { questions, store, execute }) {
     previous: () => store.dispatch({ type: 'previous' }),
     'go-to': (el) => store.dispatch({ type: 'goTo', index: Number(el.dataset.index) }),
     preview: previewQuestion,
+    start: startChallenge,
     'select-duration': (el) => store.dispatch({ type: 'selectDuration', minutes: Number(el.dataset.minutes) }),
     restart: requestRestart,
     'export-pdf': exportPdf,
@@ -350,9 +409,15 @@ export function mountApp(root, { questions, store, execute }) {
     if (phaseChanged) {
       clearTimeout(ui.confirmTimer);
       ui.confirmRestart = false;
+      clearTimeout(ui.startTimer);
+      ui.startTimer = null;
+      ui.starting = false;
     }
     const navigated = phaseChanged || ['goTo', 'next', 'previous'].includes(action.type);
     render({ scrollTop: navigated });
+    if (phaseChanged && previous.phase === 'intro' && state.phase === 'preparation') {
+      regions.main.querySelector('.phase')?.classList.add('phase--enter');
+    }
     if (phaseChanged) regions.main.focus?.({ preventScroll: true });
   });
 
@@ -363,6 +428,8 @@ export function mountApp(root, { questions, store, execute }) {
   return function unmount() {
     ticker.stop();
     clearTimeout(ui.confirmTimer);
+    clearTimeout(ui.startTimer);
+    ui.revealObserver?.disconnect();
     unsubscribe();
     for (const [target, type, fn, capture] of listeners) target.removeEventListener(type, fn, capture);
   };
