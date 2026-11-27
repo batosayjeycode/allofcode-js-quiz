@@ -5,8 +5,12 @@
  * Phase flow (strictly forward; any action that does not belong to the
  * current phase is ignored):
  *
- *   preparation ──(5 min deadline)──▶ durationSelection ──(pick 5/10/15)──▶ quiz
- *   quiz ──(all questions run, or deadline)──▶ result ──(restart)──▶ preparation
+ *   intro ──(start)──▶ preparation ──(5 min deadline)──▶ durationSelection ──(pick 5/10/15)──▶ quiz
+ *   quiz ──(all questions run, or deadline)──▶ result ──(restart)──▶ intro
+ *
+ * `intro` is the landing page of a new session: nothing is timed yet, and
+ * `start` is the only action it accepts. No other phase can return to it
+ * except a restart of a finished quiz.
  *
  * Anti-cheat rules enforced here:
  * - Deadlines are absolute timestamps. Every action carries `now`, and passed
@@ -31,7 +35,7 @@ const STORAGE_VERSION = 4;
 
 export const PREPARATION_MS = 5 * 60_000;
 export const QUIZ_DURATIONS = Object.freeze([5, 10, 15]); // minutes
-export const PHASES = Object.freeze(['preparation', 'durationSelection', 'quiz', 'result']);
+export const PHASES = Object.freeze(['intro', 'preparation', 'durationSelection', 'quiz', 'result']);
 export const END_REASONS = Object.freeze(['completed', 'timeout']);
 /** A run still "running" after this long was interrupted (reload, closed tab) and is re-run. Above the 3 s execution timeout. */
 export const RUN_STALE_MS = 5_000;
@@ -47,10 +51,10 @@ export function createInitialState(questions, now = Date.now(), random = secureR
     sessionId: newSessionId(),
     questionIds: questions.map((q) => q.id),
     ...createSessionOrder(questions, random),
-    phase: 'preparation',
-    startedAt: now,
+    phase: 'intro',
+    startedAt: null, // set when the candidate starts the challenge
     updatedAt: now,
-    preparationEndsAt: now + PREPARATION_MS,
+    preparationEndsAt: null,
     durationMinutes: null,
     quizStartedAt: null,
     quizEndsAt: null,
@@ -100,6 +104,11 @@ export function createReducer(questions, { random = secureRandom } = {}) {
     if (action.sessionId !== undefined && action.sessionId !== state.sessionId) return state;
 
     switch (action.type) {
+      case 'start': {
+        if (state.phase !== 'intro') return state;
+        return { ...state, phase: 'preparation', startedAt: action.now, preparationEndsAt: action.now + PREPARATION_MS };
+      }
+
       case 'selectDuration': {
         if (state.phase !== 'durationSelection' || !QUIZ_DURATIONS.includes(action.minutes)) return state;
         return {
@@ -202,8 +211,13 @@ export function validateState(s, questions) {
   const ids = questions.map((q) => q.id);
   if (JSON.stringify(s.questionIds) !== JSON.stringify(ids)) return false;
   if (typeof s.sessionId !== 'string' || !s.sessionId || !PHASES.includes(s.phase)) return false;
-  if (!isTimestamp(s.startedAt) || !isTimestamp(s.updatedAt) || s.updatedAt < s.startedAt) return false;
-  if (s.preparationEndsAt !== s.startedAt + PREPARATION_MS) return false;
+  if (!isTimestamp(s.updatedAt)) return false;
+  if (s.phase === 'intro') {
+    if (s.startedAt !== null || s.preparationEndsAt !== null) return false;
+  } else {
+    if (!isTimestamp(s.startedAt) || s.updatedAt < s.startedAt) return false;
+    if (s.preparationEndsAt !== s.startedAt + PREPARATION_MS) return false;
+  }
   if (!isValidOrder(s, questions)) return false;
   if (!Number.isInteger(s.currentIndex) || s.currentIndex < 0 || s.currentIndex >= ids.length) return false;
   if (!isCount(s.tabSwitches) || !Number.isFinite(s.hiddenMs) || s.hiddenMs < 0) return false;
